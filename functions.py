@@ -642,6 +642,146 @@ def plot_mediator_summary(summary_df, figsize=(18, 8), errorbar="sd"):
     plt.tight_layout()
     plt.show()
 
+# Mediation analysis part
+def prepare_mediation_plot_df(mediation_results):
+    plot_df = mediation_results.copy()
+
+    mediator_map = {
+        "Conceptual exposure": "Conceptual exposure",
+        "Practical AI use": "Practical AI use",
+        "Learning ecology": "Learning ecology",
+        "Language load": "Language load",
+        "Epistemic stance": "Epistemic stance",
+        "conceptual_exposure_score": "Conceptual exposure",
+        "practical_ai_use_score": "Practical AI use",
+        "learning_ecology_score": "Learning ecology",
+        "language_load_score": "Language load",
+        "epistemic_stance_score": "Epistemic stance",
+    }
+
+    outcome_map = {
+        "AI conceptual understanding": "AI conceptual understanding",
+        "AI ability/confidence": "AI ability/confidence",
+        "ai_factor1_score": "AI conceptual understanding",
+        "ai_factor2_score": "AI ability/confidence",
+    }
+
+    plot_df["mediator"] = plot_df["mediator"].map(mediator_map).fillna(plot_df["mediator"])
+    plot_df["outcome"] = plot_df["outcome"].map(outcome_map).fillna(plot_df["outcome"])
+
+    mediator_order = [
+        "Conceptual exposure",
+        "Practical AI use",
+        "Learning ecology",
+        "Language load",
+        "Epistemic stance",
+    ]
+    plot_df["mediator"] = pd.Categorical(
+        plot_df["mediator"],
+        categories=mediator_order,
+        ordered=True
+    )
+
+    plot_df["sample"] = pd.Categorical(
+        plot_df["sample"],
+        categories=["1111", "1204", "Combined"],
+        ordered=True
+    )
+
+    return plot_df.sort_values(["outcome", "sample", "mediator"])
+
+
+def plot_indirect_effect_forest(mediation_results, figsize=(18, 12)):
+
+    plot_df = prepare_mediation_plot_df(mediation_results)
+
+    outcomes = ["AI conceptual understanding", "AI ability/confidence"]
+    samples = ["1111", "1204", "Combined"]
+
+    fig, axes = plt.subplots(2, 3, figsize=figsize, sharex=True, sharey=True)
+    mediator_order = list(plot_df["mediator"].cat.categories)
+
+    for i, outcome in enumerate(outcomes):
+        for j, sample in enumerate(samples):
+            ax = axes[i, j]
+            sub = plot_df[
+                (plot_df["outcome"] == outcome) &
+                (plot_df["sample"] == sample)
+            ].copy().sort_values("mediator")
+
+            y = np.arange(len(mediator_order))
+            x = sub["indirect_boot_mean"].values
+            xerr_left = x - sub["indirect_ci_low_95"].values
+            xerr_right = sub["indirect_ci_high_95"].values - x
+
+            colors = ["#4C72B0" if lo > 0 or hi < 0 else "#999999"
+                      for lo, hi in zip(sub["indirect_ci_low_95"], sub["indirect_ci_high_95"])]
+
+            for k in range(len(sub)):
+                ax.errorbar(
+                    x[k], y[k],
+                    xerr=[[xerr_left[k]], [xerr_right[k]]],
+                    fmt="o",
+                    capsize=4,
+                    color=colors[k]
+                )
+
+            ax.axvline(0, color="black", linestyle="--", linewidth=1)
+            ax.set_title(f"{sample} | {outcome}")
+            ax.set_yticks(y)
+            if j == 0:
+                ax.set_yticklabels(mediator_order)
+            else:
+                ax.set_yticklabels([])
+            if i == 1:
+                ax.set_xlabel("Bootstrap indirect effect (a × b)")
+
+    fig.suptitle("Simple mediation indirect effects by mediator, outcome, and sample", y=1.02)
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_a_b_paths(mediation_results, figsize=(18, 12)):
+    plot_df = prepare_mediation_plot_df(mediation_results)
+
+    outcomes = ["AI conceptual understanding", "AI ability/confidence"]
+    samples = ["1111", "1204", "Combined"]
+
+    fig, axes = plt.subplots(2, 3, figsize=figsize, sharex=True, sharey=True)
+    mediator_order = list(plot_df["mediator"].cat.categories)
+
+    for i, outcome in enumerate(outcomes):
+        for j, sample in enumerate(samples):
+            ax = axes[i, j]
+            sub = plot_df[
+                (plot_df["outcome"] == outcome) &
+                (plot_df["sample"] == sample)
+            ].copy().sort_values("mediator")
+
+            y = np.arange(len(mediator_order))
+
+            ax.scatter(sub["a_path"], y, s=70, label="a path: SES → M")
+            ax.scatter(sub["b_path"], y, s=70, marker="s", label="b path: M → AI | SES")
+
+            ax.axvline(0, color="black", linestyle="--", linewidth=1)
+            ax.set_title(f"{sample} | {outcome}")
+            ax.set_yticks(y)
+            if j == 0:
+                ax.set_yticklabels(mediator_order)
+            else:
+                ax.set_yticklabels([])
+            if i == 1:
+                ax.set_xlabel("Standardized path coefficient")
+
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=2, frameon=False)
+    fig.suptitle("a- and b-path patterns in simple mediation models", y=1.05)
+    plt.tight_layout()
+    plt.show()
+
+
+
+
 # =============================================================================
 # 7. Linear modeling
 # =============================================================================
