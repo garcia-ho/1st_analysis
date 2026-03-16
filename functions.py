@@ -208,20 +208,6 @@ def zscore_series(s):
     s = pd.Series(s, dtype="float")
     return (s - s.mean()) / s.std(ddof=0)
 
-def get_ses_nominal_covariates(df):
-    """
-    Return available nominal/count SES-related covariates that should stay
-    outside the main SES index but can be used as controls.
-    """
-    candidate_cols = [
-        "ses_school_dss_intl",
-        "ses_school_other",
-        "ses_housing_subsidized",
-        "ses_housing_private",
-        "ses_household_size_num",
-    ]
-    return [c for c in candidate_cols if c in df.columns]
-
 
 def prepare_dataset(path_1111, path_1204):
     """
@@ -255,20 +241,6 @@ def prepare_dataset(path_1111, path_1204):
     for col in ["ses_lang_cantonese", "ses_lang_mandarin",
                 "ses_lang_english", "ses_lang_other"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    # ── nominal SES background variables ─────────────────────────────────────
-    # School type: Government/Aided as reference; DSS + International grouped;
-    # Others kept separate.
-    df["ses_school_dss_intl"] = df["ses_school_type_num"].isin([2, 3]).astype(float)
-    df["ses_school_other"] = (df["ses_school_type_num"] == 4).astype(float)
-
-    # Housing type: PRH as reference; Subsidized ownership separate;
-    # Private owned + private rented grouped.
-    df["ses_housing_subsidized"] = (df["ses_housing_type_num"] == 2).astype(float)
-    df["ses_housing_private"] = df["ses_housing_type_num"].isin([3, 4]).astype(float)
-
-    # Optional crowding-style covariate outside the main SES index.
-    df["ses_space_per_person"] = df["ses_home_area_num"] / df["ses_household_size_num"]
 
     # ── AI literacy scoring ──────────────────────────────────────────────────
     ai_reverse = [
@@ -322,16 +294,9 @@ def prepare_dataset(path_1111, path_1204):
     z_ses = df[ses_scored_cols].apply(lambda s: (s - s.mean()) / s.std(ddof=0))
     df["ses_index"] = z_ses.mean(axis=1)
 
-    school_nominal_cols = ["ses_school_dss_intl", "ses_school_other"]
-    housing_nominal_cols = ["ses_housing_subsidized", "ses_housing_private"]
-
     meta = {
         "ai_scored_cols": ai_scored_cols,
         "ses_scored_cols": ses_scored_cols,
-        "school_nominal_cols": school_nominal_cols,
-        "housing_nominal_cols": housing_nominal_cols,
-        "ses_control_cols": school_nominal_cols + housing_nominal_cols + ["ses_household_size_num"],
-        "ses_efa_cols": ses_scored_cols,
     }
     return df, meta
 
@@ -677,6 +642,121 @@ def plot_mediator_summary(summary_df, figsize=(18, 8), errorbar="sd"):
     plt.tight_layout()
     plt.show()
 
+
+
+# Change of total indirect effect using 4 left-out SES variables
+def plot_direct_effect_verification(direct_df, figsize=(12, 9)):
+    plot_df = direct_df.copy()
+
+    order = ["none", "home_language", "school", "housing", "household_size"]
+    label_map = {
+        "none": "No extra check",
+        "home_language": "Control home language",
+        "school": "Control school type",
+        "housing": "Control housing type",
+        "household_size": "Control household size",
+    }
+
+    plot_df = plot_df[plot_df["check_group"].isin(order)].copy()
+    plot_df["check_group"] = pd.Categorical(plot_df["check_group"], categories=order, ordered=True)
+    plot_df = plot_df.sort_values("check_group")
+    plot_df["check_label"] = plot_df["check_group"].map(label_map)
+
+    x = np.arange(len(plot_df))
+
+    plt.figure(figsize=figsize)
+    plt.errorbar(
+        x=x,
+        y=plot_df["beta_ses_std"],
+        yerr=[
+            plot_df["beta_ses_std"] - plot_df["ci_low_95"],
+            plot_df["ci_high_95"] - plot_df["beta_ses_std"]
+        ],
+        fmt="o",
+        capsize=5,
+        linewidth=2
+    )
+
+    plt.axhline(0, color="black", linestyle="--", linewidth=1)
+    plt.xticks(x, plot_df["check_label"], rotation=20, ha="right")
+    plt.ylabel("Standardized SES effect on AI literacy")
+    plt.xlabel("")
+    plt.title("Direct SES effect across verification checks")
+
+    for i, row in plot_df.reset_index(drop=True).iterrows():
+        plt.text(
+            i,
+            row["beta_ses_std"] + 0.01,
+            f"p={row['p_hc3']:.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=10
+        )
+
+    plt.tight_layout()
+    plt.show()
+
+
+# mediation analysis using 4 left-out SES variables
+def plot_mediation_verification(med_df, figsize=(12, 9)):
+    plot_df = med_df.copy()
+
+    order = ["none", "home_language", "school", "housing", "household_size"]
+    label_map = {
+        "none": "No extra check",
+        "home_language": "Control home language",
+        "school": "Control school type",
+        "housing": "Control housing type",
+        "household_size": "Control household size",
+    }
+
+    plot_df = plot_df[plot_df["check_group"].isin(order)].copy()
+    plot_df["check_group"] = pd.Categorical(plot_df["check_group"], categories=order, ordered=True)
+    plot_df = plot_df.sort_values("check_group")
+    plot_df["check_label"] = plot_df["check_group"].map(label_map)
+
+    y = np.arange(len(plot_df))
+
+    colors = [
+        "#4C72B0" if (lo > 0 or hi < 0) else "#999999"
+        for lo, hi in zip(plot_df["indirect_ci_low_95"], plot_df["indirect_ci_high_95"])
+    ]
+
+    plt.figure(figsize=figsize)
+
+    for i, row in plot_df.reset_index(drop=True).iterrows():
+        plt.errorbar(
+            x=row["indirect_ab"],
+            y=i,
+            xerr=[[row["indirect_ab"] - row["indirect_ci_low_95"]],
+                  [row["indirect_ci_high_95"] - row["indirect_ab"]]],
+            fmt="o",
+            capsize=5,
+            color=colors[i],
+            linewidth=2
+        )
+
+    plt.axvline(0, color="black", linestyle="--", linewidth=1)
+    plt.yticks(y, plot_df["check_label"])
+    plt.xlabel("Indirect effect (a × b)")
+    plt.ylabel("")
+    plt.title("Mediation verification across categorical checks")
+
+    for i, row in plot_df.reset_index(drop=True).iterrows():
+        plt.text(
+            row["indirect_ci_high_95"] + 0.003,
+            i,
+            f"Pr(>0)={row['prop_ab_positive']:.2f}",
+            va="center",
+            fontsize=10
+        )
+
+    plt.tight_layout()
+    plt.show()
+
+
+
+
 # Mediation analysis part
 def prepare_mediation_plot_df(mediation_results):
     plot_df = mediation_results.copy()
@@ -822,27 +902,18 @@ def plot_a_b_paths(mediation_results, figsize=(18, 12)):
 # =============================================================================
 
 # Total effect of SES - AI
-def fit_total_effect_model(df, sample="Combined", control_cols=None):
+def fit_total_effect_model(df, sample="Combined"):
 
-
-    if control_cols is None:
-        control_cols = get_ses_nominal_covariates(df)
-
-    base_cols = ["ses_index", "ai_lit_score"] + control_cols
 
     if sample == "Combined":
-        d = df[base_cols].dropna().copy()
+        d = df[["ses_index", "ai_lit_score"]].dropna().copy()
     else:
-        d = df.loc[df["course"] == sample, base_cols].dropna().copy()
+        d = df.loc[df["course"] == sample, ["ses_index", "ai_lit_score"]].dropna().copy()
 
     d["ses_z"] = zscore_series(d["ses_index"])
     d["ai_z"] = zscore_series(d["ai_lit_score"])
 
-    model_covariates = ["ses_z"] + control_cols
-    if "ses_household_size_num" in d.columns:
-        d["ses_household_size_num"] = zscore_series(d["ses_household_size_num"])
-
-    X = sm.add_constant(d[model_covariates])
+    X = sm.add_constant(d["ses_z"])
     y = d["ai_z"]
 
     model = sm.OLS(y, X).fit(cov_type="HC3")
@@ -1087,11 +1158,8 @@ def mediator_summary_table(df):
 # =============================================================================
 
 
-def prepare_simple_mediation_data(df, sample, x, m, y, control_cols=None):
-    if control_cols is None:
-        control_cols = get_ses_nominal_covariates(df)
-
-    cols = [x, m, y] + control_cols
+def prepare_simple_mediation_data(df, sample, x, m, y):
+    cols = [x, m, y]
 
     if sample == "Combined":
         d = df[cols].dropna().copy()
@@ -1102,29 +1170,23 @@ def prepare_simple_mediation_data(df, sample, x, m, y, control_cols=None):
     d[m] = zscore_series(d[m])
     d[y] = zscore_series(d[y])
 
-    if "ses_household_size_num" in d.columns:
-        d["ses_household_size_num"] = zscore_series(d["ses_household_size_num"])
-
     return d
 
 
 # SLR
-def fit_simple_mediation(df, sample, x, m, y, control_cols=None):
-    d = prepare_simple_mediation_data(df, sample, x, m, y, control_cols=control_cols)
+def fit_simple_mediation(df, sample, x, m, y):
+    d = prepare_simple_mediation_data(df, sample, x, m, y)
 
-    if control_cols is None:
-        control_cols = get_ses_nominal_covariates(df)
-
-    # a path: M ~ X + controls
-    Xa = sm.add_constant(d[[x] + control_cols])
+    # a path: M ~ X
+    Xa = sm.add_constant(d[[x]])
     model_a = sm.OLS(d[m], Xa).fit(cov_type="HC3")
 
-    # total effect: Y ~ X + controls
-    Xt = sm.add_constant(d[[x] + control_cols])
+    # total effect: Y ~ X
+    Xt = sm.add_constant(d[[x]])
     model_total = sm.OLS(d[y], Xt).fit(cov_type="HC3")
 
-    # b path and direct effect: Y ~ X + M + controls
-    Xb = sm.add_constant(d[[x, m] + control_cols])
+    # b path and direct effect: Y ~ X + M
+    Xb = sm.add_constant(d[[x, m]])
     model_b = sm.OLS(d[y], Xb).fit(cov_type="HC3")
 
     a = model_a.params[x]
@@ -1156,12 +1218,9 @@ def fit_simple_mediation(df, sample, x, m, y, control_cols=None):
 
 
 
-def bootstrap_indirect_effect(df, sample, x, m, y, n_boot=3000, seed=2026, control_cols=None):
+def bootstrap_indirect_effect(df, sample, x, m, y, n_boot=3000, seed=2026):
     rng = np.random.default_rng(seed)
-    d = prepare_simple_mediation_data(df, sample, x, m, y, control_cols=control_cols)
-
-    if control_cols is None:
-        control_cols = get_ses_nominal_covariates(df)
+    d = prepare_simple_mediation_data(df, sample, x, m, y)
 
     n = len(d)
     ab_vals = []
@@ -1171,10 +1230,10 @@ def bootstrap_indirect_effect(df, sample, x, m, y, n_boot=3000, seed=2026, contr
         boot = d.iloc[idx].copy()
 
         try:
-            Xa = sm.add_constant(boot[[x] + control_cols])
+            Xa = sm.add_constant(boot[[x]])
             model_a = sm.OLS(boot[m], Xa).fit()
 
-            Xb = sm.add_constant(boot[[x, m] + control_cols])
+            Xb = sm.add_constant(boot[[x, m]])
             model_b = sm.OLS(boot[y], Xb).fit()
 
             a = model_a.params[x]
@@ -1200,13 +1259,11 @@ def bootstrap_indirect_effect(df, sample, x, m, y, n_boot=3000, seed=2026, contr
 
 
 # Run all simple mediations for every combination of sample, mediator, and outcome,
-def run_all_simple_mediations(df, x="ses_index", mediators=None, outcomes=None, n_boot=3000, seed=2026, control_cols=None):
+def run_all_simple_mediations(df, x="ses_index", mediators=None, outcomes=None, n_boot=3000, seed=2026):
     if mediators is None:
         mediators = mediator_vars
     if outcomes is None:
         outcomes = outcome_vars
-    if control_cols is None:
-        control_cols = get_ses_nominal_covariates(df)
 
     rows = []
     boot_rows = []
@@ -1215,12 +1272,11 @@ def run_all_simple_mediations(df, x="ses_index", mediators=None, outcomes=None, 
     for sample in ["1111", "1204", "Combined"]:
         for m in mediators:
             for y in outcomes:
-                res, _, _, _, _ = fit_simple_mediation(df, sample, x, m, y, control_cols=control_cols)
+                res, _, _, _, _ = fit_simple_mediation(df, sample, x, m, y)
                 boot_res, _ = bootstrap_indirect_effect(
                     df, sample, x, m, y,
                     n_boot=n_boot,
-                    seed=seed + counter,
-                    control_cols=control_cols
+                    seed=seed + counter
                 )
                 counter += 1
 
@@ -1235,3 +1291,181 @@ def run_all_simple_mediations(df, x="ses_index", mediators=None, outcomes=None, 
     result_table = pd.concat(rows, ignore_index=True)
     return result_table
 
+
+
+# =============================================================================
+# 11. Post-Mediation Analysis using 4 left-out SES catogories
+#.    Only use combined data
+# =============================================================================
+
+def add_leftout_ses_categories(df):
+    d = df.copy()
+
+    if "ses_school_type_num" in d.columns:
+        d["school_type_cat"] = d["ses_school_type_num"].map({
+            1: "gov_aided",
+            2: "dss",
+            3: "international",
+            4: "other",
+        })
+
+    if "ses_housing_type_num" in d.columns:
+        d["housing_type_cat"] = d["ses_housing_type_num"].map({
+            1: "prh",
+            2: "subsidized_ownership",
+            3: "private_owned",
+            4: "private_rented",
+        })
+
+    if "ses_household_size_num" in d.columns:
+        d["household_size_cat"] = d["ses_household_size_num"].map({
+            1: "1_2",
+            2: "3_4",
+            3: "5_6",
+            4: "7plus",
+        })
+
+    lang_cols = [
+        "ses_lang_cantonese",
+        "ses_lang_mandarin",
+        "ses_lang_english",
+        "ses_lang_other",
+    ]
+
+    if all(col in d.columns for col in lang_cols):
+        def get_lang_group(row):
+            langs = []
+            if row["ses_lang_cantonese"] == 1:
+                langs.append("cantonese")
+            if row["ses_lang_mandarin"] == 1:
+                langs.append("mandarin")
+            if row["ses_lang_english"] == 1:
+                langs.append("english")
+            if row["ses_lang_other"] == 1:
+                langs.append("other")
+            if len(langs) == 0:
+                return "unknown"
+            if len(langs) == 1:
+                return langs[0]
+            return "multilingual"
+
+        d["home_language_cat"] = d[lang_cols].apply(get_lang_group, axis=1)
+
+    return d
+
+# create dummy variables
+def add_selected_leftout_dummies(df, group_name=None):
+    d = add_leftout_ses_categories(df)
+
+    group_map = {
+        "school": ["school_type_cat"],
+        "housing": ["housing_type_cat"],
+        "household_size": ["household_size_cat"],
+        "home_language": ["home_language_cat"],
+    }
+
+    if group_name is None:
+        return d, []
+
+    cat_cols = group_map[group_name]
+    dummy_df = pd.get_dummies(d[cat_cols], drop_first=True, dtype=float)
+    d = pd.concat([d, dummy_df], axis=1)
+
+    return d, list(dummy_df.columns)
+
+
+# similar to fit_total_effect_model
+def verify_direct_effect(df, check_group=None, sample="Combined"):
+    d, dummy_cols = add_selected_leftout_dummies(df, group_name=check_group)
+
+    if sample == "Combined":
+        sub = d.copy()
+    else:
+        sub = d[d["course"] == sample].copy()
+
+    needed = ["ses_index", "ai_lit_score"] + dummy_cols
+    sub = sub[needed].dropna().copy()
+
+    sub["ses_z"] = zscore_series(sub["ses_index"])
+    sub["ai_z"] = zscore_series(sub["ai_lit_score"])
+
+    X = sm.add_constant(sub[["ses_z"] + dummy_cols])
+    y = sub["ai_z"]
+
+    model = sm.OLS(y, X).fit(cov_type="HC3")
+
+    return pd.DataFrame({
+        "sample": [sample],
+        "check_group": [check_group if check_group else "none"],
+        "n": [len(sub)],
+        "beta_ses_std": [model.params["ses_z"]],
+        "p_hc3": [model.pvalues["ses_z"]],
+        "ci_low_95": [model.conf_int().loc["ses_z", 0]],
+        "ci_high_95": [model.conf_int().loc["ses_z", 1]],
+        "r_squared": [model.rsquared],
+    })
+
+
+
+def verify_one_mediation(df, mediator, outcome, check_group=None, sample="Combined", n_boot=3000, seed=2026):
+    d, dummy_cols = add_selected_leftout_dummies(df, group_name=check_group)
+
+    if sample == "Combined":
+        sub = d.copy()
+    else:
+        sub = d[d["course"] == sample].copy()
+
+    needed = ["ses_index", mediator, outcome] + dummy_cols
+    sub = sub[needed].dropna().copy()
+
+    sub["ses_index"] = zscore_series(sub["ses_index"])
+    sub[mediator] = zscore_series(sub[mediator])
+    sub[outcome] = zscore_series(sub[outcome])
+
+    Xa = sm.add_constant(sub[["ses_index"] + dummy_cols])
+    model_a = sm.OLS(sub[mediator], Xa).fit(cov_type="HC3")
+
+    Xt = sm.add_constant(sub[["ses_index"] + dummy_cols])
+    model_total = sm.OLS(sub[outcome], Xt).fit(cov_type="HC3")
+
+    Xb = sm.add_constant(sub[["ses_index", mediator] + dummy_cols])
+    model_b = sm.OLS(sub[outcome], Xb).fit(cov_type="HC3")
+
+    a = model_a.params["ses_index"]
+    b = model_b.params[mediator]
+    indirect = a * b
+
+    rng = np.random.default_rng(seed)
+    ab_vals = []
+    n = len(sub)
+
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        boot = sub.iloc[idx].copy()
+
+        try:
+            Xa_boot = sm.add_constant(boot[["ses_index"] + dummy_cols])
+            ma = sm.OLS(boot[mediator], Xa_boot).fit()
+
+            Xb_boot = sm.add_constant(boot[["ses_index", mediator] + dummy_cols])
+            mb = sm.OLS(boot[outcome], Xb_boot).fit()
+
+            ab_vals.append(ma.params["ses_index"] * mb.params[mediator])
+        except:
+            continue
+
+    ab_vals = np.array(ab_vals)
+
+    return pd.DataFrame({
+        "sample": [sample],
+        "check_group": [check_group if check_group else "none"],
+        "mediator": [mediator],
+        "outcome": [outcome],
+        "n": [len(sub)],
+        "a_path": [a],
+        "b_path": [b],
+        "indirect_ab": [indirect],
+        "indirect_ci_low_95": [np.quantile(ab_vals, 0.025)],
+        "indirect_ci_high_95": [np.quantile(ab_vals, 0.975)],
+        "prop_ab_positive": [(ab_vals > 0).mean()],
+    })
