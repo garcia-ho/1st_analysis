@@ -756,7 +756,6 @@ def plot_mediation_verification(med_df, figsize=(12, 9)):
 
 
 
-
 # Mediation analysis part
 def prepare_mediation_plot_df(mediation_results):
     plot_df = mediation_results.copy()
@@ -894,6 +893,39 @@ def plot_a_b_paths(mediation_results, figsize=(18, 12)):
     plt.tight_layout()
     plt.show()
 
+
+# Plot the weak mediators
+def plot_ab_diagnostic(mediation_results, sample="Combined", figsize=(12, 8)):
+    d = mediation_results.copy()
+    d = d[d["sample"] == sample].copy()
+
+    plt.figure(figsize=figsize)
+
+    outcome_markers = {
+        "AI conceptual understanding": "o",
+        "AI ability/confidence": "s",
+        "ai_factor1_score": "o",
+        "ai_factor2_score": "s",
+    }
+
+    for _, row in d.iterrows():
+        marker = outcome_markers.get(row["outcome"], "o")
+        plt.scatter(row["a_path"], row["b_path"], s=160, marker=marker)
+
+        plt.text(
+            row["a_path"] + 0.01,
+            row["b_path"] + 0.01,
+            f"{row['mediator']}\n{row['outcome']}",
+            fontsize=12
+        )
+
+    plt.axhline(0, color="black", linestyle="--", linewidth=1)
+    plt.axvline(0, color="black", linestyle="--", linewidth=1)
+    plt.xlabel("a-path: SES → mediator")
+    plt.ylabel("b-path: mediator → AI | SES")
+    plt.title(f"a–b path diagnostic plot ({sample})")
+    plt.tight_layout()
+    plt.show()
 
 
 
@@ -1469,3 +1501,53 @@ def verify_one_mediation(df, mediator, outcome, check_group=None, sample="Combin
         "indirect_ci_high_95": [np.quantile(ab_vals, 0.975)],
         "prop_ab_positive": [(ab_vals > 0).mean()],
     })
+
+
+
+
+# =============================================================================
+# 12. Check Weak Mediators
+# =============================================================================
+
+def diagnose_mediation_paths(mediation_results, a_alpha=0.05, b_alpha=0.05, ab_alpha=True):
+
+    d = mediation_results.copy()
+
+    # whether the bootstrap CI excludes zero
+    d["indirect_sig"] = ~(
+        (d["indirect_ci_low_95"] <= 0) & (d["indirect_ci_high_95"] >= 0)
+    )
+
+    def classify(row):
+        a_sig = row["a_p"] < a_alpha
+        b_sig = row["b_p"] < b_alpha
+        ab_sig = row["indirect_sig"]
+
+        if ab_sig:
+            return "supported mediation"
+        if a_sig and not b_sig:
+            return "fails at b-path"
+        if not a_sig and b_sig:
+            return "fails at a-path"
+        if not a_sig and not b_sig:
+            return "both paths weak"
+        return "inconsistent / partial"
+
+    d["diagnosis"] = d.apply(classify, axis=1)
+    return d
+
+
+
+# For a given mediator, create a table comparing the a and b paths across the two outcomes.
+def compare_one_mediator_across_outcomes(mediation_results, mediator_name, sample="Combined"):
+    d = mediation_results.copy()
+    d = d[(d["sample"] == sample) & (d["mediator"] == mediator_name)].copy()
+
+    return d[[
+        "sample", "mediator", "outcome",
+        "a_path", "a_p", "b_path", "b_p",
+        "indirect_ab", "indirect_ci_low_95", "indirect_ci_high_95",
+        "prop_ab_positive"
+    ]].sort_values("outcome")
+
+
