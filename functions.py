@@ -888,8 +888,8 @@ def plot_a_b_paths(mediation_results, figsize=(18, 12)):
                 ax.set_xlabel("Standardized path coefficient")
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=2, frameon=False)
-    fig.suptitle("a- and b-path patterns in simple mediation models", y=1.05)
+    fig.legend(handles, labels, loc="lower center", ncol=2, frameon=False, bbox_to_anchor=(0.5, -0.02))
+    fig.suptitle("a- and b-path patterns in simple mediation models", y=0.99)
     plt.tight_layout()
     plt.show()
 
@@ -1188,6 +1188,30 @@ def mediator_summary_table(df):
 # =============================================================================
 # 10. Mediation Analysis
 # =============================================================================
+
+mediator_vars = [
+    "conceptual_exposure_score",
+    "practical_ai_use_score",
+    "learning_ecology_score",
+    "language_load_score",     
+    "epistemic_stance_score",
+]
+
+outcome_vars = [
+    "ai_factor1_score",   # conceptual understanding
+    "ai_factor2_score",   # ability/confidence
+]
+
+
+label_map = {
+    "conceptual_exposure_score": "Conceptual exposure",
+    "practical_ai_use_score": "Practical AI use",
+    "learning_ecology_score": "Learning ecology",
+    "language_load_score": "Language load",   # or Language ease if reversed
+    "epistemic_stance_score": "Epistemic stance",
+    "ai_factor1_score": "AI conceptual understanding",
+    "ai_factor2_score": "AI ability/confidence",
+}
 
 
 def prepare_simple_mediation_data(df, sample, x, m, y):
