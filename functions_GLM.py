@@ -191,46 +191,33 @@ def run_poisson_mediations(df, x, mediators, y_bin, sample="Combined", covariate
 
 
 
-
 # =============================================================================
-# 2. Multiple mediators with Poisson outcome model
+# 2. Poisson with interaction effects for mediation analysis
 # =============================================================================
 
-def prepare_multiple_poisson_mediation_data(
-    df, sample, x, mediators, y_bin, covariates=None, standardize=True
+
+def fit_poisson_mediation_interaction(
+    df, sample, x, m, y_bin, covariates=None, eval_at_x=0.0
 ):
     if covariates is None:
         covariates = []
 
-    needed = [x] + mediators + [y_bin] + covariates
-
-    if sample == "Combined":
-        d = df[needed].dropna().copy()
-    else:
-        d = df.loc[df["course"] == sample, needed].dropna().copy()
-
-    if standardize:
-        d[x] = (d[x] - d[x].mean()) / d[x].std(ddof=0)
-        for m in mediators:
-            d[m] = (d[m] - d[m].mean()) / d[m].std(ddof=0)
-
-    return d
-
-
-def fit_multiple_poisson_mediation(df, sample, x, mediators, y_bin, covariates=None):
-    if covariates is None:
-        covariates = []
-
-    d = prepare_multiple_poisson_mediation_data(
+    d = prepare_poisson_mediation_data(
         df=df,
         sample=sample,
         x=x,
-        mediators=mediators,
+        m=m,
         y_bin=y_bin,
         covariates=covariates
     )
 
-    # total effect model: Y ~ X + C
+    d["x_m_interaction"] = d[x] * d[m]
+
+    # a-path: M ~ X + C
+    Xa = sm.add_constant(d[[x] + covariates])
+    model_a = sm.OLS(d[m], Xa).fit(cov_type="HC3")
+
+    # total effect: Y ~ X + C
     Xt = sm.add_constant(d[[x] + covariates])
     model_total = sm.GLM(
         d[y_bin],
@@ -238,188 +225,155 @@ def fit_multiple_poisson_mediation(df, sample, x, mediators, y_bin, covariates=N
         family=sm.families.Poisson(link=sm.families.links.Log())
     ).fit(cov_type="HC3")
 
-    # mediator models: M_j ~ X + C
-    mediator_models = {}
-    a_paths = {}
-    a_ps = {}
-
-    for m in mediators:
-        Xm = sm.add_constant(d[[x] + covariates])
-        mm = sm.OLS(d[m], Xm).fit(cov_type="HC3")
-        mediator_models[m] = mm
-        a_paths[m] = mm.params[x]
-        a_ps[m] = mm.pvalues[x]
-
-    # outcome model: Y ~ X + all mediators + C
-    Xy = sm.add_constant(d[[x] + mediators + covariates])
-    model_y = sm.GLM(
+    # outcome model with interaction: Y ~ X + M + X*M + C
+    Xb = sm.add_constant(d[[x, m, "x_m_interaction"] + covariates])
+    model_b = sm.GLM(
         d[y_bin],
-        Xy,
+        Xb,
         family=sm.families.Poisson(link=sm.families.links.Log())
     ).fit(cov_type="HC3")
 
-    theta1 = model_y.params[x]
-    theta1_p = model_y.pvalues[x]
+    a = model_a.params[x]
+    theta1 = model_b.params[x]
+    theta2 = model_b.params[m]
+    theta3 = model_b.params["x_m_interaction"]
     total_logrr = model_total.params[x]
-    total_p = model_total.pvalues[x]
 
-    b_paths = {m: model_y.params[m] for m in mediators}
-    b_ps = {m: model_y.pvalues[m] for m in mediators}
+    # conditional indirect effect evaluated at x = eval_at_x
+    indirect_logrr = a * (theta2 + theta3 * eval_at_x)
+    indirect_rr = np.exp(indirect_logrr)
 
-    indirect_components_logrr = {m: a_paths[m] * b_paths[m] for m in mediators}
-    joint_indirect_logrr = sum(indirect_components_logrr.values())
-
-    summary = pd.DataFrame({
+    result = pd.DataFrame({
         "sample": [sample],
+        "mediator": [m],
         "outcome": [y_bin],
         "n": [len(d)],
+        "a_path": [a],
+        "a_p": [model_a.pvalues[x]],
+        "theta1_direct_logrr": [theta1],
+        "theta1_direct_p": [model_b.pvalues[x]],
+        "theta2_mediator_logrr": [theta2],
+        "theta2_p": [model_b.pvalues[m]],
+        "theta3_interaction_logrr": [theta3],
+        "theta3_p": [model_b.pvalues["x_m_interaction"]],
         "total_logrr": [total_logrr],
         "total_rr": [np.exp(total_logrr)],
-        "total_p": [total_p],
-        "direct_logrr": [theta1],
-        "direct_rr": [np.exp(theta1)],
-        "direct_p": [theta1_p],
-        "joint_indirect_logrr": [joint_indirect_logrr],
-        "joint_indirect_rr": [np.exp(joint_indirect_logrr)],
+        "total_p": [model_total.pvalues[x]],
+        "direct_rr_at_m0": [np.exp(theta1)],
+        "indirect_logrr_eval": [indirect_logrr],
+        "indirect_rr_eval": [indirect_rr],
+        "eval_at_x": [eval_at_x],
+        "r2_mediator_model": [model_a.rsquared],
     })
 
-    component_table = pd.DataFrame({
-        "mediator": mediators,
-        "a_path": [a_paths[m] for m in mediators],
-        "a_p": [a_ps[m] for m in mediators],
-        "theta2_mediator_logrr": [b_paths[m] for m in mediators],
-        "theta2_p": [b_ps[m] for m in mediators],
-        "indirect_component_logrr": [indirect_components_logrr[m] for m in mediators],
-        "indirect_component_rr": [np.exp(indirect_components_logrr[m]) for m in mediators],
-    })
-
-    return summary, component_table, mediator_models, model_total, model_y, d
+    return result, model_a, model_total, model_b, d
 
 
-
-def bootstrap_multiple_poisson_mediation(
-    df, sample, x, mediators, y_bin, covariates=None, n_boot=3000, seed=2026
+def bootstrap_poisson_indirect_interaction(
+    df, sample, x, m, y_bin, covariates=None, eval_at_x=0.0, n_boot=3000, seed=2026
 ):
     if covariates is None:
         covariates = []
 
     rng = np.random.default_rng(seed)
 
-    d = prepare_multiple_poisson_mediation_data(
+    d = prepare_poisson_mediation_data(
         df=df,
         sample=sample,
         x=x,
-        mediators=mediators,
+        m=m,
         y_bin=y_bin,
         covariates=covariates
     )
+    d["x_m_interaction"] = d[x] * d[m]
 
     n = len(d)
-    joint_vals = []
-    comp_rows = []
+    vals = []
 
     for _ in range(n_boot):
         idx = rng.integers(0, n, size=n)
         boot = d.iloc[idx].copy()
 
         try:
-            # mediator models
-            a_vals = {}
-            for m in mediators:
-                Xm = sm.add_constant(boot[[x] + covariates])
-                mm = sm.OLS(boot[m], Xm).fit()
-                a_vals[m] = mm.params[x]
+            Xa = sm.add_constant(boot[[x] + covariates])
+            ma = sm.OLS(boot[m], Xa).fit()
 
-            # outcome model
-            Xy = sm.add_constant(boot[[x] + mediators + covariates])
-            my = sm.GLM(
+            boot["x_m_interaction"] = boot[x] * boot[m]
+            Xb = sm.add_constant(boot[[x, m, "x_m_interaction"] + covariates])
+            mb = sm.GLM(
                 boot[y_bin],
-                Xy,
+                Xb,
                 family=sm.families.Poisson(link=sm.families.links.Log())
             ).fit()
 
-            b_vals = {m: my.params[m] for m in mediators}
+            a = ma.params[x]
+            theta2 = mb.params[m]
+            theta3 = mb.params["x_m_interaction"]
 
-            comp = {m: a_vals[m] * b_vals[m] for m in mediators}
-            joint = sum(comp.values())
-
-            joint_vals.append(joint)
-            comp_rows.append(comp)
-
+            vals.append(a * (theta2 + theta3 * eval_at_x))
         except Exception:
             continue
 
-    joint_vals = np.array(joint_vals)
-    comp_df = pd.DataFrame(comp_rows)
+    vals = np.array(vals)
 
-    joint_summary = pd.DataFrame({
+    out = pd.DataFrame({
         "sample": [sample],
+        "mediator": [m],
         "outcome": [y_bin],
-        "joint_indirect_logrr_boot_mean": [joint_vals.mean()],
-        "joint_indirect_logrr_ci_low_95": [np.quantile(joint_vals, 0.025)],
-        "joint_indirect_logrr_ci_high_95": [np.quantile(joint_vals, 0.975)],
-        "joint_indirect_rr_boot_mean": [np.exp(joint_vals.mean())],
-        "joint_indirect_rr_ci_low_95": [np.exp(np.quantile(joint_vals, 0.025))],
-        "joint_indirect_rr_ci_high_95": [np.exp(np.quantile(joint_vals, 0.975))],
-        "prop_joint_logrr_positive": [(joint_vals > 0).mean()],
+        "eval_at_x": [eval_at_x],
+        "indirect_logrr_boot_mean": [vals.mean()],
+        "indirect_logrr_ci_low_95": [np.quantile(vals, 0.025)],
+        "indirect_logrr_ci_high_95": [np.quantile(vals, 0.975)],
+        "indirect_rr_boot_mean": [np.exp(vals.mean())],
+        "indirect_rr_ci_low_95": [np.exp(np.quantile(vals, 0.025))],
+        "indirect_rr_ci_high_95": [np.exp(np.quantile(vals, 0.975))],
+        "prop_logrr_positive": [(vals > 0).mean()],
     })
 
-    comp_summary = pd.DataFrame({
-        "mediator": mediators,
-        "indirect_component_logrr_boot_mean": [comp_df[m].mean() for m in mediators],
-        "indirect_component_logrr_ci_low_95": [comp_df[m].quantile(0.025) for m in mediators],
-        "indirect_component_logrr_ci_high_95": [comp_df[m].quantile(0.975) for m in mediators],
-        "indirect_component_rr_boot_mean": [np.exp(comp_df[m].mean()) for m in mediators],
-        "indirect_component_rr_ci_low_95": [np.exp(comp_df[m].quantile(0.025)) for m in mediators],
-        "indirect_component_rr_ci_high_95": [np.exp(comp_df[m].quantile(0.975)) for m in mediators],
-        "prop_component_logrr_positive": [(comp_df[m] > 0).mean() for m in mediators],
-    })
-
-    return joint_summary, comp_summary, joint_vals, comp_df
+    return out, vals
 
 
-def run_multiple_poisson_mediator_model(
-    df, x, mediators, y_bin, sample="Combined", covariates=None, n_boot=3000, seed=2026
+def run_poisson_mediations_interaction(
+    df, x, mediators, y_bin, sample="Combined", covariates=None,
+    eval_at_x=0.0, n_boot=3000, seed=2026
 ):
     if covariates is None:
         covariates = []
 
-    summary, component_table, mediator_models, model_total, model_y, d = fit_multiple_poisson_mediation(
-        df=df,
-        sample=sample,
-        x=x,
-        mediators=mediators,
-        y_bin=y_bin,
-        covariates=covariates
-    )
+    rows = []
 
-    boot_joint, boot_components, joint_vals, comp_df = bootstrap_multiple_poisson_mediation(
-        df=df,
-        sample=sample,
-        x=x,
-        mediators=mediators,
-        y_bin=y_bin,
-        covariates=covariates,
-        n_boot=n_boot,
-        seed=seed
-    )
+    for i, m in enumerate(mediators):
+        res, _, _, _, _ = fit_poisson_mediation_interaction(
+            df=df,
+            sample=sample,
+            x=x,
+            m=m,
+            y_bin=y_bin,
+            covariates=covariates,
+            eval_at_x=eval_at_x
+        )
 
-    full_summary = summary.merge(
-        boot_joint,
-        on=["sample", "outcome"],
-        how="left"
-    )
+        boot_res, _ = bootstrap_poisson_indirect_interaction(
+            df=df,
+            sample=sample,
+            x=x,
+            m=m,
+            y_bin=y_bin,
+            covariates=covariates,
+            eval_at_x=eval_at_x,
+            n_boot=n_boot,
+            seed=seed + i
+        )
 
-    full_components = component_table.merge(
-        boot_components,
-        on="mediator",
-        how="left"
-    )
+        rows.append(
+            res.merge(
+                boot_res,
+                on=["sample", "mediator", "outcome", "eval_at_x"],
+                how="left"
+            )
+        )
 
-    return full_summary, full_components, mediator_models, model_total, model_y, d
-
-
-
+    return pd.concat(rows, ignore_index=True)
 
 
 # =============================================================================
