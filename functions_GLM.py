@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
-
+from scipy.stats import ttest_ind
 
 
 # =============================================================================
@@ -385,13 +385,31 @@ def run_poisson_mediations_interaction(
             seed=seed + i
         )
 
-        rows.append(
-            res.merge(
-                boot_res,
-                on=["sample", "mediator", "outcome", "eval_at_x"],
-                how="left"
-            )
+        merged = res.merge(
+            boot_res,
+            on=["sample", "mediator", "outcome", "eval_at_x"],
+            how="left"
         )
+
+        keep_cols = [
+            "sample",
+            "mediator",
+            "outcome",
+            "n",
+            "a_path",
+            "a_p",
+            "theta2_mediator_logrr",
+            "theta2_p",
+            "theta3_interaction_logrr",
+            "theta3_p",
+            "indirect_rr_eval",
+            "eval_at_x",
+            "indirect_rr_ci_low_95",
+            "indirect_rr_ci_high_95",
+            "prop_logrr_positive",
+        ]
+
+        rows.append(merged[keep_cols])
 
     return pd.concat(rows, ignore_index=True)
 

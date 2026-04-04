@@ -1,13 +1,6 @@
 """
 functions.py — Utility functions for Phase 1 AI Literacy analysis.
 
-Sections
---------
-1. Constants / Config       – rename_map, item_labels
-2. Text Cleaning            – clean_text, extract_leading_code
-3. Data Loading & Scoring   – add_combined_panel, prepare_dataset
-4. Statistical Utilities    – cronbach_alpha, cliffs_delta
-5. Reporting Tables         – construct_summary_table, reliability_table, effect_size_table
 """
 
 import re
@@ -22,6 +15,9 @@ import statsmodels.api as sm
 from factor_analyzer import FactorAnalyzer
 from factor_analyzer.factor_analyzer import calculate_bartlett_sphericity, calculate_kmo
 
+from scipy.stats import ttest_ind
+
+import itertools
 
 
 
@@ -301,6 +297,7 @@ def prepare_dataset(path_1111, path_1204):
     return df, meta
 
 
+
 # =============================================================================
 # 4. Statistical Utilities
 # =============================================================================
@@ -329,6 +326,171 @@ def cliffs_delta(x, y):
         return np.nan
     u = mannwhitneyu(x, y, alternative="two-sided").statistic
     return 2 * u / (len(x) * len(y)) - 1
+
+
+# Special: T-test for 'other' school vs non-other school
+def school_others_ses_ttest(
+    df,
+    school_col="ses_school_type_num",
+    others_code=4,
+    metrics=None
+):
+    if metrics is None:
+        metrics = [
+            "ses_parent1_edu_num",
+            "ses_parent2_edu_num",
+            "ses_household_income_num",
+            "ses_home_area_num",
+            "ses_device_access_scored_num",
+            "ses_internet_quality_scored_num",
+            "ses_financial_constraint_scored_num",
+            "ses_index",
+        ]
+
+    d = df.copy()
+    d["school_group"] = np.where(d[school_col] == others_code, "Others", "Non-others")
+
+    label_map = {
+        "ses_parent1_edu_num": "Parent 1 education",
+        "ses_parent2_edu_num": "Parent 2 education",
+        "ses_household_income_num": "Household income",
+        "ses_home_area_num": "Home area",
+        "ses_device_access_scored_num": "Device access",
+        "ses_internet_quality_scored_num": "Internet quality",
+        "ses_financial_constraint_scored_num": "Low financial strain",
+        "ses_index": "SES index",
+    }
+
+    def cohens_d(x, y):
+        x = pd.Series(x).dropna()
+        y = pd.Series(y).dropna()
+        nx, ny = len(x), len(y)
+        sx, sy = x.std(ddof=1), y.std(ddof=1)
+        pooled_sd = np.sqrt(((nx - 1) * sx**2 + (ny - 1) * sy**2) / (nx + ny - 2))
+        if pooled_sd == 0:
+            return np.nan
+        return (x.mean() - y.mean()) / pooled_sd
+
+    rows = []
+
+    for metric in metrics:
+        sub = d[["school_group", metric]].dropna().copy()
+        others = sub.loc[sub["school_group"] == "Others", metric]
+        non_others = sub.loc[sub["school_group"] == "Non-others", metric]
+
+        test = ttest_ind(
+            others,
+            non_others,
+            equal_var=False,
+            alternative="two-sided"
+        )
+
+        rows.append({
+            "metric": label_map.get(metric, metric),
+            "n_others": len(others),
+            "mean_diff_others_minus_nonothers": others.mean() - non_others.mean(),
+            "t_stat": test.statistic,
+            "p-value": test.pvalue,
+            "cohens_d": cohens_d(others, non_others),
+        })
+
+    return pd.DataFrame(rows).sort_values("p-value").reset_index(drop=True)
+
+
+
+
+
+# =============================================================================
+# * Special treatment for some SES variables
+# =============================================================================
+
+# Spliting SES into 2 dimentions 
+# (2 versions, one with 'other school' as a separate category, one with 'other school' assigned to the nearest known group)
+def add_assigned_school_type_ord(
+    df,
+    school_col="ses_school_type_num",
+    metrics=None,
+    new_col="ses_school_type_ord"
+):
+    if metrics is None:
+        metrics = [
+            "ses_parent1_edu_num",
+            "ses_parent2_edu_num",
+            "ses_household_income_num",
+            "ses_home_area_num",
+            "ses_device_access_scored_num",
+            "ses_internet_quality_scored_num",
+            "ses_financial_constraint_scored_num",
+        ]
+
+    d = df.copy()
+
+    keep = [school_col] + metrics
+    work = d[keep].dropna().copy()
+
+# assign 'other school' group to the known group with the smallest Euclidean distance
+    zcols = []
+    for col in metrics:
+        zcol = f"{col}_z"
+        work[zcol] = (work[col] - work[col].mean()) / work[col].std(ddof=0)
+        zcols.append(zcol)
+
+    # centroids for known school groups only
+    known = work[work[school_col].isin([1, 2, 3])].copy()
+    centroids = known.groupby(school_col)[zcols].mean()
+
+    d[new_col] = d[school_col]
+
+    # assign 'Others school' student by student
+    others_idx = work.index[work[school_col] == 4]
+
+    for idx in others_idx:
+        row = work.loc[idx, zcols]
+        dists = ((centroids - row.values) ** 2).sum(axis=1) ** 0.5
+        d.loc[idx, new_col] = dists.idxmin()
+
+    return d
+
+
+def add_ses_space_house_variables(
+    df,
+    home_area_col="ses_home_area_num",
+    household_size_col="ses_household_size_num",
+    school_type_col="ses_school_type_num",
+    housing_type_col="ses_housing_type_num"
+):
+    d = df.copy()
+
+    # space per person
+    d["ses_space_per_person"] = d[home_area_col] / d[household_size_col].replace(0, np.nan)
+
+    # assign Others school type by nearest centroid, then keep ordered coding
+    d = add_assigned_school_type_ord(
+        d,
+        school_col=school_type_col,
+        metrics=[
+            "ses_parent1_edu_num",
+            "ses_parent2_edu_num",
+            "ses_household_income_num",
+            "ses_home_area_num",
+            "ses_internet_quality_scored_num",
+            "ses_financial_constraint_scored_num",
+            "ses_device_access_scored_num"
+        ],
+        new_col="ses_school_type_ord"
+    )
+
+    # housing type as ordered SES resource
+    housing_map = {
+        1: 1,  # Public Rental Housing
+        2: 2,  # Subsidised Home Ownership
+        3: 3,  # Private Owned
+        4: 2,  # Private Rented
+    }
+    d["ses_housing_type_ord"] = d[housing_type_col].map(housing_map)
+
+    return d
+
 
 
 # =============================================================================
@@ -465,6 +627,7 @@ def plot_item_profile(df, meta, construct="SES", figsize=(14, 8)):
     plt.legend(title="Sample")
     plt.tight_layout()
     plt.show()
+
 
 def plot_ses_ai_correlation_heatmaps(df, meta, figsize=(18, 6), annotate=False):
     item_labels = get_item_labels()
@@ -805,55 +968,99 @@ def prepare_mediation_plot_df(mediation_results):
     return plot_df.sort_values(["outcome", "sample", "mediator"])
 
 
-def plot_indirect_effect_forest(mediation_results, figsize=(16, 10)):
+def plot_indirect_effect_forest(mediation_results, sample="Combined", figsize=(14, 10)):
+    plot_df = mediation_results.copy()
 
-    plot_df = prepare_mediation_plot_df(mediation_results)
+    plot_df = plot_df[plot_df["sample"] == sample].copy()
 
-    outcomes = ["AI conceptual understanding", "AI ability/confidence"]
-    sample = "Combined"
+    ses_map = {
+        "ses_factor1_score": "SES Factor 1",
+        "ses_factor2_score": "SES Factor 2",
+        "ses_index": "SES index",
+    }
 
-    fig, axes = plt.subplots(1, 2, figsize=figsize, sharex=True, sharey=True)
-    mediator_order = list(plot_df["mediator"].cat.categories)
+    outcome_map = {
+        "ai_factor1_score": "AI conceptual understanding",
+        "ai_factor2_score": "AI ability/confidence",
+        "AI conceptual understanding": "AI conceptual understanding",
+        "AI ability/confidence": "AI ability/confidence",
+    }
 
-    for j, outcome in enumerate(outcomes):
-        ax = axes[j]
-        sub = plot_df[
-            (plot_df["outcome"] == outcome) &
-            (plot_df["sample"] == sample)
-        ].copy().sort_values("mediator")
+    mediator_map = {
+        "conceptual_exposure_score": "Conceptual exposure",
+        "practical_ai_use_score": "Practical AI use",
+        "learning_ecology_score": "Learning ecology",
+        "language_load_score": "Language load",
+        "epistemic_stance_score": "Epistemic stance",
+        "Conceptual exposure": "Conceptual exposure",
+        "Practical AI use": "Practical AI use",
+        "Learning ecology": "Learning ecology",
+        "Language load": "Language load",
+        "Epistemic stance": "Epistemic stance",
+    }
 
-        y = np.arange(len(mediator_order))
-        x = sub["indirect_boot_mean"].values
-        xerr_left = x - sub["indirect_ci_low_95"].values
-        xerr_right = sub["indirect_ci_high_95"].values - x
+    plot_df["ses_dimension"] = plot_df["ses_dimension"].map(ses_map).fillna(plot_df["ses_dimension"])
+    plot_df["outcome"] = plot_df["outcome"].map(outcome_map).fillna(plot_df["outcome"])
+    plot_df["mediator"] = plot_df["mediator"].map(mediator_map).fillna(plot_df["mediator"])
 
-        colors = ["#4C72B0" if lo > 0 or hi < 0 else "#999999"
-                  for lo, hi in zip(sub["indirect_ci_low_95"], sub["indirect_ci_high_95"])]
+    mediator_order = [
+        "Conceptual exposure",
+        "Practical AI use",
+        "Learning ecology",
+        "Language load",
+        "Epistemic stance",
+    ]
+    ses_order = ["SES Factor 1", "SES Factor 2"]
+    outcome_order = ["AI conceptual understanding", "AI ability/confidence"]
 
-        for k in range(len(sub)):
-            ax.errorbar(
-                x[k], y[k],
-                xerr=[[xerr_left[k]], [xerr_right[k]]],
-                fmt="o",
-                capsize=4,
-                color=colors[k]
-            )
-            # Add p-value text
-            ax.text(
-                sub["indirect_ci_high_95"].values[k] + 0.005,
-                y[k],
-                f"Pr(>0)={sub['prop_ab_positive'].values[k]:.2f}",
-                va="center",
-                fontsize=12
-            )
+    plot_df["mediator"] = pd.Categorical(plot_df["mediator"], categories=mediator_order, ordered=True)
+    plot_df["ses_dimension"] = pd.Categorical(plot_df["ses_dimension"], categories=ses_order, ordered=True)
+    plot_df["outcome"] = pd.Categorical(plot_df["outcome"], categories=outcome_order, ordered=True)
 
-        ax.axvline(0, color="black", linestyle="--", linewidth=1)
-        ax.set_title(f"{outcome}")
-        ax.set_yticks(y)
-        ax.set_yticklabels(mediator_order)
-        ax.set_xlabel("Bootstrap indirect effect (a × b)")
+    fig, axes = plt.subplots(2, 2, figsize=figsize, sharex=True, sharey=True)
+    axes = np.array(axes)
 
-    fig.suptitle("Simple mediation indirect effects (Combined)", y=1.02)
+    sig_color = "#D55E00"
+    nonsig_color = "#9A9A9A"
+
+    for i, ses_dim in enumerate(ses_order):
+        for j, outcome in enumerate(outcome_order):
+            ax = axes[i, j]
+
+            sub = plot_df[
+                (plot_df["ses_dimension"] == ses_dim) &
+                (plot_df["outcome"] == outcome)
+            ].copy().sort_values("mediator")
+
+            y = np.arange(len(mediator_order))
+
+            for k, (_, row) in enumerate(sub.iterrows()):
+                sig = (row["indirect_ci_low_95"] > 0) or (row["indirect_ci_high_95"] < 0)
+                color = sig_color if sig else nonsig_color
+
+                ax.errorbar(
+                    x=row["indirect_boot_mean"],
+                    y=k,
+                    xerr=[[row["indirect_boot_mean"] - row["indirect_ci_low_95"]],
+                          [row["indirect_ci_high_95"] - row["indirect_boot_mean"]]],
+                    fmt="o",
+                    capsize=5,
+                    color=color,
+                    ecolor=color,
+                    elinewidth=3 if sig else 2,
+                    markersize=10
+                )
+
+            ax.axvline(0, color="black", linestyle="--", linewidth=1)
+            ax.set_title(f"{ses_dim} → {outcome}")
+            ax.set_yticks(y)
+            ax.set_yticklabels(mediator_order)
+            ax.tick_params(axis="y", labelsize=15)
+
+            if i == 1:
+                ax.set_xlabel("Indirect effect (a × b)")
+
+    fig.suptitle(f"Indirect effects by SES dimension and AI outcome ({sample})", y=1.02)
     plt.tight_layout()
     plt.show()
 
@@ -951,7 +1158,6 @@ def plot_ab_diagnostic(mediation_results, sample="Combined", figsize=(16, 10)):
 # Total effect of SES - AI
 def fit_total_effect_model(df, sample="Combined"):
 
-
     if sample == "Combined":
         d = df[["ses_index", "ai_lit_score"]].dropna().copy()
     else:
@@ -969,10 +1175,7 @@ def fit_total_effect_model(df, sample="Combined"):
 
     out = pd.DataFrame({
         "sample": [sample],
-        "n": [len(d)],
         "beta_ses_std": [model.params["ses_z"]],
-        "se_hc3": [model.bse["ses_z"]],
-        "t_hc3": [model.tvalues["ses_z"]],
         "p_hc3": [model.pvalues["ses_z"]],
         "ci_low_95": [model.conf_int().loc["ses_z", 0]],
         "ci_high_95": [model.conf_int().loc["ses_z", 1]],
@@ -984,6 +1187,32 @@ def fit_total_effect_model(df, sample="Combined"):
     return out, model, d
 
 
+def run_total_effect_models(df, ses_cols, ai_cols):
+    if isinstance(ses_cols, str):
+        ses_cols = [ses_cols]
+    if isinstance(ai_cols, str):
+        ai_cols = [ai_cols]
+
+    results = []
+
+    for ses_col in ses_cols:
+        for ai_col in ai_cols:
+            d = df.copy()
+            d["ses_index"] = d[ses_col]
+            d["ai_lit_score"] = d[ai_col]
+
+            res, _, _ = fit_total_effect_model(d, sample="Combined")
+            res["ses_dimension"] = ses_col
+            res["ai_outcome"] = ai_col
+            results.append(res)
+
+    out = pd.concat(results, ignore_index=True)
+
+    first_cols = ["sample", "ses_dimension", "ai_outcome"]
+    other_cols = [c for c in out.columns if c not in first_cols]
+    out = out[first_cols + other_cols]
+
+    return out
 
 # =============================================================================
 # 8. Exploratory Factor Analysis 
@@ -1042,7 +1271,7 @@ def run_scree_analysis(df, sample, items, figsize=(14, 8)):
     plt.tight_layout()
     plt.show()
 
-    return eig_table
+    return 
 
 
 # After diagnostics, fit an EFA model
@@ -1080,22 +1309,81 @@ def clean_loadings(loadings, cutoff=0.30):
 
 
 
-def plot_loading_heatmap(loadings, title="Factor loadings", figsize=(20, 8)):
-    plt.figure(figsize=figsize)
+def plot_loading_heatmap(loadings, cutoff=0.30, figsize=(16, 10), title="Factor loadings heatmap"):
+    plot_df = loadings.copy()
+
+    factor_cols = [c for c in plot_df.columns if c.lower().startswith("factor")]
+    plot_df = plot_df[factor_cols]
+
+    abs_df = plot_df.abs()
+    dominant_factor = abs_df.idxmax(axis=1)
+    dominant_value = abs_df.max(axis=1)
+
+    dim_number = dominant_factor.str.extract(r"(\d+)")[0]
+    dim_number = dim_number.where(dominant_value >= cutoff, "")
+
+    order_df = pd.DataFrame({
+        "dominant_factor": dominant_factor,
+        "dominant_value": dominant_value,
+        "dim_number": dim_number
+    }, index=plot_df.index)
+
+    order_df["_factor_num"] = order_df["dominant_factor"].str.extract(r"(\d+)")[0].astype(float)
+    order_df["_factor_num"] = order_df["_factor_num"].fillna(999)
+
+    row_order = order_df.sort_values(
+        ["_factor_num", "dominant_value"],
+        ascending=[True, False]
+    ).index
+
+    plot_df = plot_df.loc[row_order]
+    dim_number = dim_number.loc[row_order]
+
+    # annotation table: blank out values below cutoff
+    annot_df = plot_df.copy()
+    annot_df = annot_df.applymap(lambda x: f"{x:.2f}" if abs(x) >= cutoff else "")
+
+    fig, ax = plt.subplots(figsize=figsize)
+
     sns.heatmap(
-        loadings,
-        annot=True,
+        plot_df,
+        annot=annot_df,
+        fmt="",
         cmap="coolwarm",
         center=0,
-        vmin=-1,
-        vmax=1,
         linewidths=0.5,
-        linecolor="white"
+        cbar_kws={"label": "Loading"},
+        ax=ax
     )
-    plt.title(title)
+
+    ax.set_title(title)
+    ax.set_xlabel("Factor")
+    ax.set_ylabel("Item")
+
+    ncols = plot_df.shape[1]
+    for i, lab in enumerate(dim_number):
+        ax.text(
+            ncols + 0.15,
+            i + 0.5,
+            lab,
+            va="center",
+            ha="left",
+            fontsize=11,
+            fontweight="bold"
+        )
+
+    ax.text(
+        ncols + 0.15,
+        -0.35,
+        "Dim",
+        va="bottom",
+        ha="left",
+        fontsize=11,
+        fontweight="bold"
+    )
+
     plt.tight_layout()
     plt.show()
-
 
 
 
@@ -1141,6 +1429,7 @@ def mediator_reliability_table(df, mediator_map):
     return pd.DataFrame(rows)
 
 
+
 # Add composite scores for each mediator by averaging the two items.
 def add_mediator_composites(df, mediator_map):
     d = df.copy()
@@ -1149,6 +1438,38 @@ def add_mediator_composites(df, mediator_map):
         d[f"{mediator_name}_score"] = d[items].mean(axis=1)
 
     return d
+
+
+# Add 2 AI factor scores and 2 SES factor scores into one dataframe.
+def add_ses_ai_factor_scores(
+    df_base, ai_df, ai_items, ai_fa, ses_df, ses_items, ses_fa
+):
+
+    df_analysis = df_base.copy()
+
+    # AI factor scores
+    ai_complete = ai_df[ai_items].dropna().copy()
+    ai_scores = pd.DataFrame(
+        ai_fa.transform(ai_complete),
+        index=ai_complete.index,
+        columns=["ai_factor1_score", "ai_factor2_score"]
+    )
+    df_analysis.loc[ai_scores.index, "ai_factor1_score"] = ai_scores["ai_factor1_score"]
+    df_analysis.loc[ai_scores.index, "ai_factor2_score"] = ai_scores["ai_factor2_score"]
+
+    # SES factor scores
+    ses_complete = ses_df[ses_items].dropna().copy()
+    ses_scores = pd.DataFrame(
+        ses_fa.transform(ses_complete),
+        index=ses_complete.index,
+        columns=["ses_factor1_score", "ses_factor2_score"]
+    )
+    df_analysis.loc[ses_scores.index, "ses_factor1_score"] = ses_scores["ses_factor1_score"]
+    df_analysis.loc[ses_scores.index, "ses_factor2_score"] = ses_scores["ses_factor2_score"]
+
+    return df_analysis
+
+
 
 mediator_direction = pd.DataFrame({
     "mediator": [
@@ -1199,7 +1520,6 @@ def mediator_summary_table(df):
 
 
 
-
 # =============================================================================
 # 10. Mediation Analysis
 # =============================================================================
@@ -1208,25 +1528,29 @@ mediator_vars = [
     "conceptual_exposure_score",
     "practical_ai_use_score",
     "learning_ecology_score",
-    "language_load_score",     
+    "language_load_score",
     "epistemic_stance_score",
 ]
 
-outcome_vars = [
-    "ai_factor1_score",   # conceptual understanding
-    "ai_factor2_score",   # ability/confidence
-]
+ses_label_map = {
+    "ses_factor1_score": "SES Factor 1",
+    "ses_factor2_score": "SES Factor 2",
+    "ses_index": "SES index",
+}
 
-
-label_map = {
-    "conceptual_exposure_score": "Conceptual exposure",
-    "practical_ai_use_score": "Practical AI use",
-    "learning_ecology_score": "Learning ecology",
-    "language_load_score": "Language load",   # or Language ease if reversed
-    "epistemic_stance_score": "Epistemic stance",
+outcome_label_map = {
     "ai_factor1_score": "AI conceptual understanding",
     "ai_factor2_score": "AI ability/confidence",
 }
+
+mediator_label_map = {
+    "conceptual_exposure_score": "Conceptual exposure",
+    "practical_ai_use_score": "Practical AI use",
+    "learning_ecology_score": "Learning ecology",
+    "language_load_score": "Language load",
+    "epistemic_stance_score": "Epistemic stance",
+}
+
 
 
 def prepare_simple_mediation_data(df, sample, x, m, y):
@@ -1329,38 +1653,70 @@ def bootstrap_indirect_effect(df, sample, x, m, y, n_boot=3000, seed=2026):
 
 
 
-# Run all simple mediations for every combination of sample, mediator, and outcome,
-def run_all_simple_mediations(df, x="ses_index", mediators=None, outcomes=None, n_boot=3000, seed=2026):
+# Run all simple mediations for every combination of 2*SES, 5*mediator, and 2*AI literacy,
+def run_all_simple_mediations(
+    df, x="ses_index", mediators=None, outcomes=None, sample_list=None, n_boot=3000, seed=2026
+):
+
     if mediators is None:
         mediators = mediator_vars
     if outcomes is None:
         outcomes = outcome_vars
+    if sample_list is None:
+        sample_list = ["1111", "1204", "Combined"]
+
+    # allow one SES variable or many
+    if isinstance(x, str):
+        x_list = [x]
+    else:
+        x_list = list(x)
 
     rows = []
-    boot_rows = []
-
     counter = 0
-    for sample in ["1111", "1204", "Combined"]:
-        for m in mediators:
-            for y in outcomes:
-                res, _, _, _, _ = fit_simple_mediation(df, sample, x, m, y)
-                boot_res, _ = bootstrap_indirect_effect(
-                    df, sample, x, m, y,
-                    n_boot=n_boot,
-                    seed=seed + counter
-                )
-                counter += 1
 
-                merged = res.merge(
-                    boot_res,
-                    on=["sample", "mediator", "outcome"],
-                    how="left"
-                )
+    for sample in sample_list:
+        for x_var in x_list:
+            for m in mediators:
+                for y in outcomes:
+                    res, _, _, _, _ = fit_simple_mediation(
+                        df=df,
+                        sample=sample,
+                        x=x_var,
+                        m=m,
+                        y=y
+                    )
 
-                rows.append(merged)
+                    boot_res, _ = bootstrap_indirect_effect(
+                        df=df,
+                        sample=sample,
+                        x=x_var,
+                        m=m,
+                        y=y,
+                        n_boot=n_boot,
+                        seed=seed + counter
+                    )
+                    counter += 1
 
-    result_table = pd.concat(rows, ignore_index=True)
-    return result_table
+                    merged = res.merge(
+                        boot_res,
+                        on=["sample", "mediator", "outcome"],
+                        how="left"
+                    )
+
+                    merged["ses_dimension"] = x_var
+                    rows.append(merged)
+
+    out = pd.concat(rows, ignore_index=True)
+
+    # put ses_dimension near the front
+    first_cols = ["sample", "ses_dimension", "mediator", "outcome"]
+    other_cols = [c for c in out.columns if c not in first_cols]
+    out = out[first_cols + other_cols]
+
+    return out
+
+
+# Label maps
 
 
 
