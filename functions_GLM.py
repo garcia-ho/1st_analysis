@@ -11,26 +11,46 @@ import statsmodels.api as sm
 def make_binary_outcome(df, source_col, new_col=None, threshold="median", higher_is_one=True):
     d = df.copy()
 
+    # allow one column or a list of columns
+    if isinstance(source_col, str):
+        source_cols = [source_col]
+    else:
+        source_cols = list(source_col)
+
     if new_col is None:
-        new_col = f"{source_col}_bin"
-
-    s = d[source_col]
-
-    if threshold == "median":
-        cut = s.median()
-    elif threshold == "mean":
-        cut = s.mean()
-    elif isinstance(threshold, (int, float)):
-        cut = float(threshold)
+        new_cols = [f"{col}_bin" for col in source_cols]
+    elif isinstance(new_col, str):
+        new_cols = [new_col]
     else:
-        raise ValueError("threshold must be 'median', 'mean', or a numeric cutoff")
+        new_cols = list(new_col)
 
-    if higher_is_one:
-        d[new_col] = (s >= cut).astype(int)
-    else:
-        d[new_col] = (s <= cut).astype(int)
+    if len(source_cols) != len(new_cols):
+        raise ValueError("source_col and new_col must have the same length")
 
-    return d, cut
+    cutoffs = {}
+
+    for col, out_col in zip(source_cols, new_cols):
+        s = d[col]
+
+        if threshold == "median":
+            cut = s.median()
+        elif threshold == "mean":
+            cut = s.mean()
+        elif isinstance(threshold, dict):
+            cut = threshold[col]
+        elif isinstance(threshold, (int, float)):
+            cut = float(threshold)
+        else:
+            raise ValueError("threshold must be 'median', 'mean', a numeric cutoff, or a dict")
+
+        if higher_is_one:
+            d[out_col] = (s >= cut).astype(int)
+        else:
+            d[out_col] = (s <= cut).astype(int)
+
+        cutoffs[col] = cut
+
+    return d, cutoffs
 
 
 def prepare_poisson_mediation_data(df, sample, x, m, y_bin, covariates=None, standardize_xm=True):
