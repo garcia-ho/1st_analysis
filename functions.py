@@ -11,10 +11,10 @@ import seaborn as sns
 sns.set_theme(style="whitegrid", context="talk")
 from scipy.stats import skew, mannwhitneyu, spearmanr
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import statsmodels.api as sm
 from factor_analyzer import FactorAnalyzer
 from factor_analyzer.factor_analyzer import calculate_bartlett_sphericity, calculate_kmo
-
 from scipy.stats import ttest_ind
 
 import itertools
@@ -918,110 +918,115 @@ def plot_mediation_verification(med_df, figsize=(12, 9)):
     plt.show()
 
 
-
-# Mediation analysis part
-def prepare_mediation_plot_df(mediation_results):
-    plot_df = mediation_results.copy()
-
-    mediator_map = {
-        "Conceptual exposure": "Conceptual exposure",
-        "Practical AI use": "Practical AI use",
-        "Learning ecology": "Learning ecology",
-        "Language load": "Language load",
-        "Epistemic stance": "Epistemic stance",
-        "conceptual_exposure_score": "Conceptual exposure",
-        "practical_ai_use_score": "Practical AI use",
-        "learning_ecology_score": "Learning ecology",
-        "language_load_score": "Language load",
-        "epistemic_stance_score": "Epistemic stance",
-    }
-
-    outcome_map = {
-        "AI conceptual understanding": "AI conceptual understanding",
-        "AI ability/confidence": "AI ability/confidence",
-        "ai_factor1_score": "AI conceptual understanding",
-        "ai_factor2_score": "AI ability/confidence",
-    }
-
-    plot_df["mediator"] = plot_df["mediator"].map(mediator_map).fillna(plot_df["mediator"])
-    plot_df["outcome"] = plot_df["outcome"].map(outcome_map).fillna(plot_df["outcome"])
-
-    mediator_order = [
-        "Conceptual exposure",
-        "Practical AI use",
-        "Learning ecology",
-        "Language load",
-        "Epistemic stance",
-    ]
-    plot_df["mediator"] = pd.Categorical(
-        plot_df["mediator"],
-        categories=mediator_order,
-        ordered=True
-    )
-
-    plot_df["sample"] = pd.Categorical(
-        plot_df["sample"],
-        categories=["1111", "1204", "Combined"],
-        ordered=True
-    )
-
-    return plot_df.sort_values(["outcome", "sample", "mediator"])
-
-
-def plot_indirect_effect_forest(mediation_results, sample="Combined", figsize=(14, 10)):
-    plot_df = mediation_results.copy()
-
-    plot_df = plot_df[plot_df["sample"] == sample].copy()
-
-    ses_map = {
+ses_map = {
         "ses_factor1_score": "SES Factor 1",
         "ses_factor2_score": "SES Factor 2",
-        "ses_index": "SES index",
+        "ses_index": "SES overall",
     }
 
-    outcome_map = {
+outcome_map = {
         "ai_factor1_score": "AI conceptual understanding",
         "ai_factor2_score": "AI ability/confidence",
-        "AI conceptual understanding": "AI conceptual understanding",
-        "AI ability/confidence": "AI ability/confidence",
+        "ai_lit_score": "AI literacy overall",
     }
 
-    mediator_map = {
+mediator_map = {
         "conceptual_exposure_score": "Conceptual exposure",
         "practical_ai_use_score": "Practical AI use",
         "learning_ecology_score": "Learning ecology",
         "language_load_score": "Language load",
         "epistemic_stance_score": "Epistemic stance",
-        "Conceptual exposure": "Conceptual exposure",
-        "Practical AI use": "Practical AI use",
-        "Learning ecology": "Learning ecology",
-        "Language load": "Language load",
-        "Epistemic stance": "Epistemic stance",
     }
 
-    plot_df["ses_dimension"] = plot_df["ses_dimension"].map(ses_map).fillna(plot_df["ses_dimension"])
-    plot_df["outcome"] = plot_df["outcome"].map(outcome_map).fillna(plot_df["outcome"])
-    plot_df["mediator"] = plot_df["mediator"].map(mediator_map).fillna(plot_df["mediator"])
+ses_order = ["SES Factor 1", "SES Factor 2", "SES index"]
+    
+outcome_order = [
+        "AI conceptual understanding",
+        "AI ability/confidence",
+        "AI literacy overall",
+    ]
 
-    mediator_order = [
+mediator_order = [
         "Conceptual exposure",
         "Practical AI use",
         "Learning ecology",
         "Language load",
         "Epistemic stance",
     ]
-    ses_order = ["SES Factor 1", "SES Factor 2"]
-    outcome_order = ["AI conceptual understanding", "AI ability/confidence"]
 
-    plot_df["mediator"] = pd.Categorical(plot_df["mediator"], categories=mediator_order, ordered=True)
-    plot_df["ses_dimension"] = pd.Categorical(plot_df["ses_dimension"], categories=ses_order, ordered=True)
-    plot_df["outcome"] = pd.Categorical(plot_df["outcome"], categories=outcome_order, ordered=True)
 
-    fig, axes = plt.subplots(2, 2, figsize=figsize, sharex=True, sharey=True)
-    axes = np.array(axes)
+
+
+# Mediation analysis part
+def plot_indirect_effect_forest(results, sample="Combined", figsize=(18, 14)):
+    plot_df = results.copy()
+    plot_df = plot_df[plot_df["sample"] == sample].copy()
+
+    plot_df["ses_dimension"] = plot_df["ses_dimension"].replace(ses_map)
+    plot_df["outcome"] = plot_df["outcome"].replace(outcome_map)
+    plot_df["mediator"] = plot_df["mediator"].replace(mediator_map)
+
+    nrows, ncols = 3, 3
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, sharex=True, sharey=True)
+    axes = np.array(axes).reshape(-1)
 
     sig_color = "#D55E00"
     nonsig_color = "#9A9A9A"
+
+    panel_pairs = [(s, o) for s in ses_order for o in outcome_order]
+
+    for ax, (ses_dim, outcome) in zip(axes, panel_pairs):
+        sub = plot_df[
+            (plot_df["ses_dimension"] == ses_dim) &
+            (plot_df["outcome"] == outcome)
+        ].copy()
+
+        sub = sub.set_index("mediator").reindex(mediator_order).reset_index()
+        y = np.arange(len(mediator_order))
+
+        for k, (_, row) in enumerate(sub.iterrows()):
+            if pd.isna(row.get("indirect_boot_mean", np.nan)):
+                continue
+
+            sig = (row["indirect_ci_low_95"] > 0) or (row["indirect_ci_high_95"] < 0)
+            color = sig_color if sig else nonsig_color
+
+            ax.errorbar(
+                x=row["indirect_boot_mean"],
+                y=k,
+                xerr=[[row["indirect_boot_mean"] - row["indirect_ci_low_95"]],
+                      [row["indirect_ci_high_95"] - row["indirect_boot_mean"]]],
+                fmt="o",
+                capsize=5,
+                color=color,
+                ecolor=color,
+                elinewidth=3 if sig else 2,
+                markersize=8
+            )
+
+        ax.axvline(0, color="black", linestyle="--", linewidth=1)
+        ax.set_title(f"{ses_dim} → {outcome}")
+        ax.set_yticks(y)
+        ax.set_yticklabels(mediator_order)
+
+    for ax in axes[-ncols:]:
+        ax.set_xlabel("Indirect effect (a × b)")
+
+    fig.suptitle(f"Indirect effects by SES dimension and AI outcome ({sample})", y=1.02)
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_a_b_paths(results, sample="Combined", alpha=0.05, figsize=(18, 14)):
+    plot_df = results.copy()
+    plot_df = plot_df[plot_df["sample"] == sample].copy()
+
+    plot_df["ses_dimension"] = plot_df["ses_dimension"].replace(ses_map)
+    plot_df["outcome"] = plot_df["outcome"].replace(outcome_map)
+    plot_df["mediator"] = plot_df["mediator"].replace(mediator_map)
+
+    fig, axes = plt.subplots(3, 3, figsize=figsize, sharex=True, sharey=True)
+    axes = np.array(axes)
 
     for i, ses_dim in enumerate(ses_order):
         for j, outcome in enumerate(outcome_order):
@@ -1030,91 +1035,76 @@ def plot_indirect_effect_forest(mediation_results, sample="Combined", figsize=(1
             sub = plot_df[
                 (plot_df["ses_dimension"] == ses_dim) &
                 (plot_df["outcome"] == outcome)
-            ].copy().sort_values("mediator")
+            ].copy()
 
-            y = np.arange(len(mediator_order))
+            for _, row in sub.iterrows():
+                if pd.isna(row.get("a_path", np.nan)) or pd.isna(row.get("b_path", np.nan)):
+                    continue
 
-            for k, (_, row) in enumerate(sub.iterrows()):
-                sig = (row["indirect_ci_low_95"] > 0) or (row["indirect_ci_high_95"] < 0)
-                color = sig_color if sig else nonsig_color
+                sig_a = row["a_p"] < alpha
+                sig_b = row["b_p"] < alpha
 
-                ax.errorbar(
-                    x=row["indirect_boot_mean"],
-                    y=k,
-                    xerr=[[row["indirect_boot_mean"] - row["indirect_ci_low_95"]],
-                          [row["indirect_ci_high_95"] - row["indirect_boot_mean"]]],
-                    fmt="o",
-                    capsize=5,
+                if sig_a and sig_b:
+                    color = "#D55E00"   # orange
+                elif sig_a:
+                    color = "#0072B2"   # blue
+                elif sig_b:
+                    color = "#009E73"   # green
+                else:
+                    color = "#9A9A9A"   # gray
+
+                ax.scatter(
+                    row["a_path"],
+                    row["b_path"],
+                    s=90,
                     color=color,
-                    ecolor=color,
-                    elinewidth=3 if sig else 2,
-                    markersize=10
+                    edgecolor="black",
+                    linewidth=0.5
                 )
 
+                # larger font for significant labels
+                is_sig = sig_a or sig_b
+                ax.text(
+                    row["a_path"] + 0.01,
+                    row["b_path"] + 0.01,
+                    row["mediator"],
+                    fontsize=15 if is_sig else 8,
+                    fontweight="bold" if is_sig else "normal",
+                    color=color if is_sig else "black"
+                )
+
+            ax.axhline(0, color="black", linestyle="--", linewidth=1)
             ax.axvline(0, color="black", linestyle="--", linewidth=1)
-            ax.set_title(f"{ses_dim} → {outcome}")
-            ax.set_yticks(y)
-            ax.set_yticklabels(mediator_order)
-            ax.tick_params(axis="y", labelsize=15)
+            ax.set_title(f"{ses_dim} → {outcome}", fontsize=12)
 
-            if i == 1:
-                ax.set_xlabel("Indirect effect (a × b)")
+            if i == 2:
+                ax.set_xlabel("a path: SES → mediator")
+            if j == 0:
+                ax.set_ylabel("b path: mediator → AI | SES")
 
-    fig.suptitle(f"Indirect effects by SES dimension and AI outcome ({sample})", y=1.02)
-    plt.tight_layout()
+    legend_elements = [
+        Line2D([0], [0], marker="o", color="w", label="a and b significant",
+               markerfacecolor="#D55E00", markeredgecolor="black", markersize=12),
+        Line2D([0], [0], marker="o", color="w", label="a significant only",
+               markerfacecolor="#0072B2", markeredgecolor="black", markersize=12),
+        Line2D([0], [0], marker="o", color="w", label="b significant only",
+               markerfacecolor="#009E73", markeredgecolor="black", markersize=12),
+        Line2D([0], [0], marker="o", color="w", label="neither significant",
+               markerfacecolor="#9A9A9A", markeredgecolor="black", markersize=9),
+    ]
+
+    fig.legend(
+        handles=legend_elements,
+        loc="lower center",
+        ncol=4,
+        frameon=False,
+        bbox_to_anchor=(0.5, 0.01)
+    )
+
+    fig.suptitle(f"a–b path diagnostic plot ({sample})", y=0.98, fontsize=16)
+
+    plt.tight_layout(rect=[0, 0.06, 1, 0.95])
     plt.show()
-
-
-def plot_a_b_paths(mediation_results, figsize=(16, 10)):
-    plot_df = prepare_mediation_plot_df(mediation_results)
-
-    outcomes = ["AI conceptual understanding", "AI ability/confidence"]
-    sample = "Combined"
-
-    fig, axes = plt.subplots(1, 2, figsize=figsize, sharex=True, sharey=True)
-    mediator_order = list(plot_df["mediator"].cat.categories)
-
-    for j, outcome in enumerate(outcomes):
-        ax = axes[j]
-        sub = plot_df[
-            (plot_df["outcome"] == outcome) &
-            (plot_df["sample"] == sample)
-        ].copy().sort_values("mediator")
-
-        y = np.arange(len(mediator_order))
-
-        ax.scatter(sub["a_path"], y, s=70, label="a path: SES → M")
-        ax.scatter(sub["b_path"], y, s=70, marker="s", label="b path: M → AI | SES")
-
-        # Add p-values for a and b paths
-        for k in range(len(sub)):
-            ax.text(
-                sub["a_path"].values[k] + 0.01,
-                y[k] - 0.15,
-                f"p={sub['a_p'].values[k]:.3f}",
-                fontsize=12,
-                ha="center"
-            )
-            ax.text(
-                sub["b_path"].values[k] + 0.01,
-                y[k] + 0.15,
-                f"p={sub['b_p'].values[k]:.3f}",
-                fontsize=12,
-                ha="center"
-            )
-
-        ax.axvline(0, color="black", linestyle="--", linewidth=1)
-        ax.set_title(f"{outcome}")
-        ax.set_yticks(y)
-        ax.set_yticklabels(mediator_order)
-        ax.set_xlabel("Standardized path coefficient")
-
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", ncol=2, frameon=False, bbox_to_anchor=(0.5, -0.05))
-    fig.suptitle("a- and b-path patterns in simple mediation models (Combined)", y=0.99)
-    plt.tight_layout()
-    plt.show()
-
 
 # Plot the weak mediators
 def plot_ab_diagnostic(mediation_results, sample="Combined", figsize=(16, 10)):
@@ -1716,253 +1706,330 @@ def run_all_simple_mediations(
     return out
 
 
-# Label maps
-
-
 
 # =============================================================================
-# 11. Post-Mediation Analysis using 4 left-out SES catogories
-#.    Only use combined data
+# 11.  Model with Interaction Effects
 # =============================================================================
 
-def add_leftout_ses_categories(df):
-    d = df.copy()
+def fit_interaction_mediation_model(
+    df,
+    sample,
+    x,
+    mediator1,
+    y,
+    mediator2=None,
+    interaction_type="ses_mediator"
+):
+    """
+    interaction_type:
+        - "ses_mediator"      : Y ~ X + M1 + X*M1
+        - "mediator_mediator" : Y ~ X + M1 + M2 + M1*M2
+        - "both"              : Y ~ X + M1 + M2 + X*M1 + X*M2 + M1*M2
+    """
 
-    if "ses_school_type_num" in d.columns:
-        d["school_type_cat"] = d["ses_school_type_num"].map({
-            1: "gov_aided",
-            2: "dss",
-            3: "international",
-            4: "other",
-        })
+    needed = [x, mediator1, y]
+    if mediator2 is not None:
+        needed.append(mediator2)
 
-    if "ses_housing_type_num" in d.columns:
-        d["housing_type_cat"] = d["ses_housing_type_num"].map({
-            1: "prh",
-            2: "subsidized_ownership",
-            3: "private_owned",
-            4: "private_rented",
-        })
+    if sample == "Combined":
+        d = df[needed].dropna().copy()
+    else:
+        d = df.loc[df["course"] == sample, needed].dropna().copy()
 
-    if "ses_household_size_num" in d.columns:
-        d["household_size_cat"] = d["ses_household_size_num"].map({
-            1: "1_2",
-            2: "3_4",
-            3: "5_6",
-            4: "7plus",
-        })
+    # standardize within analysis sample
+    for col in needed:
+        d[col] = (d[col] - d[col].mean()) / d[col].std(ddof=0)
 
-    lang_cols = [
-        "ses_lang_cantonese",
-        "ses_lang_mandarin",
-        "ses_lang_english",
-        "ses_lang_other",
-    ]
+    # a-path for mediator1
+    Xa1 = sm.add_constant(d[[x]])
+    model_a1 = sm.OLS(d[mediator1], Xa1).fit(cov_type="HC3")
 
-    if all(col in d.columns for col in lang_cols):
-        def get_lang_group(row):
-            langs = []
-            if row["ses_lang_cantonese"] == 1:
-                langs.append("cantonese")
-            if row["ses_lang_mandarin"] == 1:
-                langs.append("mandarin")
-            if row["ses_lang_english"] == 1:
-                langs.append("english")
-            if row["ses_lang_other"] == 1:
-                langs.append("other")
-            if len(langs) == 0:
-                return "unknown"
-            if len(langs) == 1:
-                return langs[0]
-            return "multilingual"
+    model_a2 = None
+    if mediator2 is not None:
+        Xa2 = sm.add_constant(d[[x]])
+        model_a2 = sm.OLS(d[mediator2], Xa2).fit(cov_type="HC3")
 
-        d["home_language_cat"] = d[lang_cols].apply(get_lang_group, axis=1)
+    # total effect
+    Xt = sm.add_constant(d[[x]])
+    model_total = sm.OLS(d[y], Xt).fit(cov_type="HC3")
 
-    return d
+    # build outcome model
+    X_cols = [x, mediator1]
 
-# create dummy variables
-def add_selected_leftout_dummies(df, group_name=None):
-    d = add_leftout_ses_categories(df)
+    if interaction_type == "ses_mediator":
+        d["x_m1"] = d[x] * d[mediator1]
+        X_cols += ["x_m1"]
 
-    group_map = {
-        "school": ["school_type_cat"],
-        "housing": ["housing_type_cat"],
-        "household_size": ["household_size_cat"],
-        "home_language": ["home_language_cat"],
+    elif interaction_type == "mediator_mediator":
+        if mediator2 is None:
+            raise ValueError("mediator2 is required for interaction_type='mediator_mediator'")
+        d["m1_m2"] = d[mediator1] * d[mediator2]
+        X_cols += [mediator2, "m1_m2"]
+
+    elif interaction_type == "both":
+        if mediator2 is None:
+            raise ValueError("mediator2 is required for interaction_type='both'")
+        d["x_m1"] = d[x] * d[mediator1]
+        d["x_m2"] = d[x] * d[mediator2]
+        d["m1_m2"] = d[mediator1] * d[mediator2]
+        X_cols += [mediator2, "x_m1", "x_m2", "m1_m2"]
+
+    else:
+        raise ValueError("interaction_type must be 'ses_mediator', 'mediator_mediator', or 'both'")
+
+    Xy = sm.add_constant(d[X_cols])
+    model_y = sm.OLS(d[y], Xy).fit(cov_type="HC3")
+
+    out = {
+        "sample": sample,
+        "ses_dimension": x,
+        "mediator1": mediator1,
+        "mediator2": mediator2,
+        "outcome": y,
+        "interaction_type": interaction_type,
+        "n": len(d),
+
+        "a_m1": model_a1.params[x],
+        "a_m1_p": model_a1.pvalues[x],
+
+        "c_total": model_total.params[x],
+        "c_total_p": model_total.pvalues[x],
+
+        "b_m1": model_y.params.get(mediator1, np.nan),
+        "b_m1_p": model_y.pvalues.get(mediator1, np.nan),
+
+        "b_x": model_y.params.get(x, np.nan),
+        "b_x_p": model_y.pvalues.get(x, np.nan),
+
+        "r2_total_model": model_total.rsquared,
+        "r2_outcome_model": model_y.rsquared,
     }
 
-    if group_name is None:
-        return d, []
-
-    cat_cols = group_map[group_name]
-    dummy_df = pd.get_dummies(d[cat_cols], drop_first=True, dtype=float)
-    d = pd.concat([d, dummy_df], axis=1)
-
-    return d, list(dummy_df.columns)
-
-
-# similar to fit_total_effect_model
-def verify_direct_effect(df, check_group=None, sample="Combined"):
-    d, dummy_cols = add_selected_leftout_dummies(df, group_name=check_group)
-
-    if sample == "Combined":
-        sub = d.copy()
+    if model_a2 is not None:
+        out["a_m2"] = model_a2.params[x]
+        out["a_m2_p"] = model_a2.pvalues[x]
     else:
-        sub = d[d["course"] == sample].copy()
+        out["a_m2"] = np.nan
+        out["a_m2_p"] = np.nan
 
-    needed = ["ses_index", "ai_lit_score"] + dummy_cols
-    sub = sub[needed].dropna().copy()
+    if interaction_type == "ses_mediator":
+        out["b_m2"] = np.nan
+        out["b_m2_p"] = np.nan
+        out["b_x_m1"] = model_y.params.get("x_m1", np.nan)
+        out["b_x_m1_p"] = model_y.pvalues.get("x_m1", np.nan)
+        out["b_x_m2"] = np.nan
+        out["b_x_m2_p"] = np.nan
+        out["b_m1_m2"] = np.nan
+        out["b_m1_m2_p"] = np.nan
 
-    sub["ses_z"] = zscore_series(sub["ses_index"])
-    sub["ai_z"] = zscore_series(sub["ai_lit_score"])
+    elif interaction_type == "mediator_mediator":
+        out["b_m2"] = model_y.params.get(mediator2, np.nan)
+        out["b_m2_p"] = model_y.pvalues.get(mediator2, np.nan)
+        out["b_x_m1"] = np.nan
+        out["b_x_m1_p"] = np.nan
+        out["b_x_m2"] = np.nan
+        out["b_x_m2_p"] = np.nan
+        out["b_m1_m2"] = model_y.params.get("m1_m2", np.nan)
+        out["b_m1_m2_p"] = model_y.pvalues.get("m1_m2", np.nan)
 
-    X = sm.add_constant(sub[["ses_z"] + dummy_cols])
-    y = sub["ai_z"]
+    elif interaction_type == "both":
+        out["b_m2"] = model_y.params.get(mediator2, np.nan)
+        out["b_m2_p"] = model_y.pvalues.get(mediator2, np.nan)
+        out["b_x_m1"] = model_y.params.get("x_m1", np.nan)
+        out["b_x_m1_p"] = model_y.pvalues.get("x_m1", np.nan)
+        out["b_x_m2"] = model_y.params.get("x_m2", np.nan)
+        out["b_x_m2_p"] = model_y.pvalues.get("x_m2", np.nan)
+        out["b_m1_m2"] = model_y.params.get("m1_m2", np.nan)
+        out["b_m1_m2_p"] = model_y.pvalues.get("m1_m2", np.nan)
 
-    model = sm.OLS(y, X).fit(cov_type="HC3")
-
-    return pd.DataFrame({
-        "sample": [sample],
-        "check_group": [check_group if check_group else "none"],
-        "n": [len(sub)],
-        "beta_ses_std": [model.params["ses_z"]],
-        "p_hc3": [model.pvalues["ses_z"]],
-        "ci_low_95": [model.conf_int().loc["ses_z", 0]],
-        "ci_high_95": [model.conf_int().loc["ses_z", 1]],
-        "r_squared": [model.rsquared],
-    })
+    return pd.DataFrame([out]), model_a1, model_a2, model_total, model_y, d
 
 
 
-def verify_one_mediation(df, mediator, outcome, check_group=None, sample="Combined", n_boot=3000, seed=2026):
-    d, dummy_cols = add_selected_leftout_dummies(df, group_name=check_group)
+def run_interaction_mediation_models(
+    df,
+    ses_cols=None,
+    mediators=None,
+    outcomes=None,
+    sample="Combined",
+    interaction_type="ses_mediator"
+):
+    if ses_cols is None:
+        ses_cols = ["ses_index", "ses_factor1_score", "ses_factor2_score"]
 
-    if sample == "Combined":
-        sub = d.copy()
+    if mediators is None:
+        mediators = [
+            "practical_ai_use_score",
+            "learning_ecology_score",
+            "language_load_score",
+            "epistemic_stance_score",
+        ]
+
+    if outcomes is None:
+        outcomes = ["ai_factor1_score", "ai_factor2_score", "ai_lit_score"]
+
+    rows = []
+
+    for x in ses_cols:
+        for y in outcomes:
+            if interaction_type == "ses_mediator":
+                for m1 in mediators:
+                    res, _, _, _, _, _ = fit_interaction_mediation_model(
+                        df=df,
+                        sample=sample,
+                        x=x,
+                        mediator1=m1,
+                        mediator2=None,
+                        y=y,
+                        interaction_type=interaction_type
+                    )
+                    rows.append(res)
+
+            elif interaction_type in ["mediator_mediator", "both"]:
+                for m1, m2 in itertools.combinations(mediators, 2):
+                    res, _, _, _, _, _ = fit_interaction_mediation_model(
+                        df=df,
+                        sample=sample,
+                        x=x,
+                        mediator1=m1,
+                        mediator2=m2,
+                        y=y,
+                        interaction_type=interaction_type
+                    )
+                    rows.append(res)
+
+            else:
+                raise ValueError("interaction_type must be 'ses_mediator', 'mediator_mediator', or 'both'")
+
+    return pd.concat(rows, ignore_index=True)
+
+
+
+def summarize_interaction_mediation_results(results, alpha=0.05, interaction_only=False):
+    d = results.copy()
+
+    d["sig_a_m1"] = d["a_m1_p"] < alpha
+    d["sig_a_m2"] = d["a_m2_p"] < alpha
+    d["sig_b_m1"] = d["b_m1_p"] < alpha
+    d["sig_b_m2"] = d["b_m2_p"] < alpha
+    d["sig_b_x"] = d["b_x_p"] < alpha
+
+    d["sig_x_m1"] = d["b_x_m1_p"] < alpha if "b_x_m1_p" in d.columns else False
+    d["sig_x_m2"] = d["b_x_m2_p"] < alpha if "b_x_m2_p" in d.columns else False
+    d["sig_m1_m2"] = d["b_m1_m2_p"] < alpha if "b_m1_m2_p" in d.columns else False
+
+    sig_cols = [
+        "sig_a_m1", "sig_a_m2", "sig_b_m1", "sig_b_m2",
+        "sig_b_x", "sig_x_m1", "sig_x_m2", "sig_m1_m2"
+    ]
+    d["n_sig_terms"] = d[sig_cols].sum(axis=1)
+
+    if interaction_only:
+        d = d[(d["sig_x_m1"]) | (d["sig_x_m2"]) | (d["sig_m1_m2"])].copy()
     else:
-        sub = d[d["course"] == sample].copy()
+        d = d[d["n_sig_terms"] > 0].copy()
 
-    needed = ["ses_index", mediator, outcome] + dummy_cols
-    sub = sub[needed].dropna().copy()
+    keep_cols = [
+        "ses_dimension",
+        "mediator1",
+        "mediator2",
+        "outcome",
+        "interaction_type",
+        "a_m1", "a_m1_p",
+        "a_m2", "a_m2_p",
+        "b_m1", "b_m1_p",
+        "b_m2", "b_m2_p",
+        "b_x", "b_x_p",
+        "b_x_m1", "b_x_m1_p",
+        "b_x_m2", "b_x_m2_p",
+        "b_m1_m2", "b_m1_m2_p",
+        "n_sig_terms",
+        "r2_outcome_model",
+    ]
+    keep_cols = [c for c in keep_cols if c in d.columns]
 
-    sub["ses_index"] = zscore_series(sub["ses_index"])
-    sub[mediator] = zscore_series(sub[mediator])
-    sub[outcome] = zscore_series(sub[outcome])
+    d = d[keep_cols].sort_values(
+        by=["n_sig_terms", "r2_outcome_model"],
+        ascending=[False, False]
+    ).reset_index(drop=True)
 
-    Xa = sm.add_constant(sub[["ses_index"] + dummy_cols])
-    model_a = sm.OLS(sub[mediator], Xa).fit(cov_type="HC3")
-
-    Xt = sm.add_constant(sub[["ses_index"] + dummy_cols])
-    model_total = sm.OLS(sub[outcome], Xt).fit(cov_type="HC3")
-
-    Xb = sm.add_constant(sub[["ses_index", mediator] + dummy_cols])
-    model_b = sm.OLS(sub[outcome], Xb).fit(cov_type="HC3")
-
-    a = model_a.params["ses_index"]
-    b = model_b.params[mediator]
-    indirect = a * b
-
-    rng = np.random.default_rng(seed)
-    ab_vals = []
-    n = len(sub)
-
-    for _ in range(n_boot):
-        idx = rng.integers(0, n, size=n)
-        boot = sub.iloc[idx].copy()
-
-        try:
-            Xa_boot = sm.add_constant(boot[["ses_index"] + dummy_cols])
-            ma = sm.OLS(boot[mediator], Xa_boot).fit()
-
-            Xb_boot = sm.add_constant(boot[["ses_index", mediator] + dummy_cols])
-            mb = sm.OLS(boot[outcome], Xb_boot).fit()
-
-            ab_vals.append(ma.params["ses_index"] * mb.params[mediator])
-        except:
-            continue
-
-    ab_vals = np.array(ab_vals)
-
-    return pd.DataFrame({
-        "sample": [sample],
-        "check_group": [check_group if check_group else "none"],
-        "mediator": [mediator],
-        "outcome": [outcome],
-        "n": [len(sub)],
-        "a_path": [a],
-        "b_path": [b],
-        "indirect_ab": [indirect],
-        "indirect_ci_low_95": [np.quantile(ab_vals, 0.025)],
-        "indirect_ci_high_95": [np.quantile(ab_vals, 0.975)],
-        "prop_ab_positive": [(ab_vals > 0).mean()],
-    })
-
-
-
-
-# =============================================================================
-# 12. Check Weak Mediators
-# =============================================================================
-
-def diagnose_mediation_paths(mediation_results, a_alpha=0.05, b_alpha=0.05, ab_alpha=True):
-
-    d = mediation_results.copy()
-
-    # whether the bootstrap CI excludes zero
-    d["indirect_sig"] = ~(
-        (d["indirect_ci_low_95"] <= 0) & (d["indirect_ci_high_95"] >= 0)
-    )
-
-    def classify(row):
-        a_sig = row["a_p"] < a_alpha
-        b_sig = row["b_p"] < b_alpha
-        ab_sig = row["indirect_sig"]
-
-        if ab_sig:
-            return "supported mediation"
-        if a_sig and not b_sig:
-            return "fails at b-path"
-        if not a_sig and b_sig:
-            return "fails at a-path"
-        if not a_sig and not b_sig:
-            return "both paths weak"
-        return "inconsistent / partial"
-
-    d["diagnosis"] = d.apply(classify, axis=1)
     return d
 
 
 
-# For a given mediator, create a table comparing the a and b paths across the two outcomes.
-def compare_one_mediator_across_outcomes(mediation_results, mediator_name, sample="Combined"):
-    d = mediation_results.copy()
-    d = d[(d["sample"] == sample) & (d["mediator"] == mediator_name)].copy()
+def plot_significant_mediator_interactions(results, alpha=0.05, sample="Combined", figsize=(16, 6)):
+    d = results.copy()
+    d = d[d["sample"] == sample].copy()
 
-    return d[[
-        "sample", "mediator", "outcome",
-        "a_path", "a_p", "b_path", "b_p",
-        "indirect_ab", "indirect_ci_low_95", "indirect_ci_high_95",
-        "prop_ab_positive"
-    ]].sort_values("outcome")
-
-
-# 2-item within each mediator
-def run_item_level_mediation(df, sample, x, mediator_items, y, n_boot=3000, seed=2026):
+    # collect significant interaction terms into one long table
     rows = []
 
-    for i, m in enumerate(mediator_items):
-        res, _, _, _, _ = fit_simple_mediation(df, sample, x, m, y)
-        boot_res, _ = bootstrap_indirect_effect(
-            df, sample, x, m, y,
-            n_boot=n_boot,
-            seed=seed + i
-        )
+    for _, row in d.iterrows():
+        interaction_type = row.get("interaction_type", "")
 
-        merged = res.merge(
-            boot_res,
-            on=["sample", "mediator", "outcome"],
-            how="left"
-        )
-        rows.append(merged)
+        if ("b_x_m1_p" in d.columns) and pd.notna(row.get("b_x_m1_p")) and row["b_x_m1_p"] < alpha:
+            rows.append({
+                "ses_dimension": row["ses_dimension"],
+                "mediator1": row["mediator1"],
+                "mediator2": row.get("mediator2", np.nan),
+                "outcome": row["outcome"],
+                "interaction_type": interaction_type,
+                "term": "SES × mediator1",
+                "coef": row["b_x_m1"],
+                "p_value": row["b_x_m1_p"],
+            })
 
-    return pd.concat(rows, ignore_index=True)
+        if ("b_x_m2_p" in d.columns) and pd.notna(row.get("b_x_m2_p")) and row["b_x_m2_p"] < alpha:
+            rows.append({
+                "ses_dimension": row["ses_dimension"],
+                "mediator1": row["mediator1"],
+                "mediator2": row.get("mediator2", np.nan),
+                "outcome": row["outcome"],
+                "interaction_type": interaction_type,
+                "term": "SES × mediator2",
+                "coef": row["b_x_m2"],
+                "p_value": row["b_x_m2_p"],
+            })
+
+        if ("b_m1_m2_p" in d.columns) and pd.notna(row.get("b_m1_m2_p")) and row["b_m1_m2_p"] < alpha:
+            rows.append({
+                "ses_dimension": row["ses_dimension"],
+                "mediator1": row["mediator1"],
+                "mediator2": row.get("mediator2", np.nan),
+                "outcome": row["outcome"],
+                "interaction_type": interaction_type,
+                "term": "mediator1 × mediator2",
+                "coef": row["b_m1_m2"],
+                "p_value": row["b_m1_m2_p"],
+            })
+
+    sig_df = pd.DataFrame(rows)
+
+    if sig_df.empty:
+        print("No significant interaction terms found.")
+        return
+
+    sig_df["ses_dimension"] = sig_df["ses_dimension"].replace(ses_map)
+    sig_df["mediator1"] = sig_df["mediator1"].replace(mediator_map)
+    sig_df["mediator2"] = sig_df["mediator2"].replace(mediator_map)
+    sig_df["outcome"] = sig_df["outcome"].replace(outcome_map)
+
+    def make_label(row):
+        if row["term"] == "SES × mediator1":
+            return f'{row["ses_dimension"]} × {row["mediator1"]} → {row["outcome"]}'
+        elif row["term"] == "SES × mediator2":
+            return f'{row["ses_dimension"]} × {row["mediator2"]} → {row["outcome"]}'
+        else:
+            return f'{row["mediator1"]} × {row["mediator2"]} → {row["outcome"]}'
+
+    sig_df["label"] = sig_df.apply(make_label, axis=1)
+    sig_df = sig_df.sort_values("coef").reset_index(drop=True)
+
+    plt.figure(figsize=figsize)
+    plt.axvline(0, color="black", linestyle="--", linewidth=1)
+    plt.scatter(sig_df["coef"], np.arange(len(sig_df)), s=90)
+    plt.yticks(np.arange(len(sig_df)), sig_df["label"])
+    plt.xlabel("Interaction coefficient")
+    plt.title(f"Significant interaction terms ({sample})")
+    plt.tight_layout()
+    plt.show()
