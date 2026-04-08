@@ -7,6 +7,9 @@ from scipy import stats
 from statsmodels.stats.multitest import multipletests
 import networkx as nx
 
+from statsmodels.stats.anova import anova_lm
+
+
 
 
 # =============================================================================
@@ -195,6 +198,185 @@ def network_adjacency_matrix(G):
         mat.loc[v, u] = data["partial_r"]
 
     return mat
+
+
+# =============================================================================
+# 3. Hierarchical Regression
+# =============================================================================
+
+
+def fit_hierarchical_models(
+    df,
+    outcome,
+    blocks,
+    standardize=True,
+    cov_type="HC3"
+):
+    
+    all_vars = [outcome]
+    for cols in blocks.values():
+        all_vars.extend(cols)
+    all_vars = list(dict.fromkeys(all_vars))
+
+    d = df[all_vars].dropna().copy()
+
+    if standardize:
+        for col in all_vars:
+            d[col] = (d[col] - d[col].mean()) / d[col].std(ddof=0)
+
+    fitted = {}
+    model_rows = []
+    coef_rows = []
+
+    y = d[outcome]
+
+    for model_name, xcols in blocks.items():
+        X = sm.add_constant(d[xcols])
+        model = sm.OLS(y, X).fit(cov_type=cov_type)
+        fitted[model_name] = model
+
+        model_rows.append({
+            "outcome": outcome,
+            "model": model_name,
+            "n": int(model.nobs),
+            "r_squared": model.rsquared,
+            "adj_r_squared": model.rsquared_adj,
+            "aic": model.aic,
+            "bic": model.bic,
+            "f_pvalue": model.f_pvalue,
+        })
+
+        ci = model.conf_int()
+        for term in model.params.index:
+            if term == "const":
+                continue
+            coef_rows.append({
+                "outcome": outcome,
+                "model": model_name,
+                "term": term,
+                "beta": model.params[term],
+                "p_value": model.pvalues[term],
+                "ci_low_95": ci.loc[term, 0],
+                "ci_high_95": ci.loc[term, 1],
+            })
+
+    model_table = pd.DataFrame(model_rows)
+    coef_table = pd.DataFrame(coef_rows)
+
+    return {
+        "data": d,
+        "models": fitted,
+        "model_table": model_table,
+        "coef_table": coef_table,
+    }
+
+
+
+
+def hierarchical_model_comparison(fit_obj):
+    model_names = list(fit_obj["models"].keys())
+    rows = []
+
+    for i in range(len(model_names) - 1):
+        m_small_name = model_names[i]
+        m_big_name = model_names[i + 1]
+
+        m_small = fit_obj["models"][m_small_name]
+        m_big = fit_obj["models"][m_big_name]
+
+        comp = anova_lm(m_small, m_big)
+        p_change = comp["Pr(>F)"].iloc[1]
+        df_diff = comp["df_diff"].iloc[1]
+        ss_diff = comp["ss_diff"].iloc[1]
+
+        rows.append({
+            "outcome": fit_obj["model_table"]["outcome"].iloc[0],
+            "from_model": m_small_name,
+            "to_model": m_big_name,
+            "r2_from": m_small.rsquared,
+            "r2_to": m_big.rsquared,
+            "delta_r2": m_big.rsquared - m_small.rsquared,
+            "df_diff": df_diff,
+            "ss_diff": ss_diff,
+            "p_change": p_change,
+        })
+
+    return pd.DataFrame(rows)
+
+
+def adjust_hierarchical_results(model_comp_table, coef_table,
+                                block_method="holm",
+                                coef_method="fdr_bh",
+                                alpha=0.05):
+    comp = model_comp_table.copy()
+    coef = coef_table.copy()
+
+    if not comp.empty:
+        reject_block, p_block_adj, _, _ = multipletests(
+            comp["p_change"], alpha=alpha, method=block_method
+        )
+        comp["p_change_adj"] = p_block_adj
+        comp["sig_block_adj"] = reject_block
+
+    if not coef.empty:
+        coef["p_value_adj"] = np.nan
+        coef["sig_adj"] = False
+
+        for outcome in coef["outcome"].unique():
+            for model in coef.loc[coef["outcome"] == outcome, "model"].unique():
+                idx = coef.index[(coef["outcome"] == outcome) & (coef["model"] == model)]
+                reject_coef, p_coef_adj, _, _ = multipletests(
+                    coef.loc[idx, "p_value"], alpha=alpha, method=coef_method
+                )
+                coef.loc[idx, "p_value_adj"] = p_coef_adj
+                coef.loc[idx, "sig_adj"] = reject_coef
+
+    return comp, coef
+
+
+def run_hierarchical_regression(
+    df,
+    outcomes,
+    blocks,
+    standardize=True,
+    cov_type="HC3",
+    block_method="holm",
+    coef_method="fdr_bh",
+    alpha=0.05
+):
+    all_model_tables = []
+    all_comp_tables = []
+    all_coef_tables = []
+    fitted_by_outcome = {}
+
+    for outcome in outcomes:
+        fit_obj = fit_hierarchical_models(
+            df=df,
+            outcome=outcome,
+            blocks=blocks,
+            standardize=standardize,
+            cov_type=cov_type
+        )
+        comp_table = hierarchical_model_comparison(fit_obj)
+        comp_table, coef_table = adjust_hierarchical_results(
+            comp_table,
+            fit_obj["coef_table"],
+            block_method=block_method,
+            coef_method=coef_method,
+            alpha=alpha
+        )
+
+        all_model_tables.append(fit_obj["model_table"])
+        all_comp_tables.append(comp_table)
+        all_coef_tables.append(coef_table)
+        fitted_by_outcome[outcome] = fit_obj["models"]
+
+    return {
+        "model_table": pd.concat(all_model_tables, ignore_index=True),
+        "comparison_table": pd.concat(all_comp_tables, ignore_index=True),
+        "coef_table": pd.concat(all_coef_tables, ignore_index=True),
+        "models": fitted_by_outcome,
+    }
 
 
 
