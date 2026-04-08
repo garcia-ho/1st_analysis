@@ -16,7 +16,7 @@ import statsmodels.api as sm
 from factor_analyzer import FactorAnalyzer
 from factor_analyzer.factor_analyzer import calculate_bartlett_sphericity, calculate_kmo
 from scipy.stats import ttest_ind
-
+from statsmodels.stats.multitest import multipletests
 import itertools
 
 
@@ -930,14 +930,6 @@ outcome_map = {
         "ai_lit_score": "AI literacy overall",
     }
 
-mediator_map = {
-        "conceptual_exposure_score": "Conceptual exposure",
-        "practical_ai_use_score": "Practical AI use",
-        "learning_ecology_score": "Learning ecology",
-        "language_load_score": "Language load",
-        "epistemic_stance_score": "Epistemic stance",
-    }
-
 ses_order = ["SES Factor 1", "SES Factor 2", "SES index"]
     
 outcome_order = [
@@ -964,7 +956,7 @@ def plot_indirect_effect_forest(results, sample="Combined", figsize=(18, 14)):
 
     plot_df["ses_dimension"] = plot_df["ses_dimension"].replace(ses_map)
     plot_df["outcome"] = plot_df["outcome"].replace(outcome_map)
-    plot_df["mediator"] = plot_df["mediator"].replace(mediator_map)
+    plot_df["mediator"] = plot_df["mediator"].replace(mediator_label_map)
 
     nrows, ncols = 3, 3
     fig, axes = plt.subplots(nrows, ncols, figsize=figsize, sharex=True, sharey=True)
@@ -1023,7 +1015,7 @@ def plot_a_b_paths(results, sample="Combined", alpha=0.05, figsize=(18, 14)):
 
     plot_df["ses_dimension"] = plot_df["ses_dimension"].replace(ses_map)
     plot_df["outcome"] = plot_df["outcome"].replace(outcome_map)
-    plot_df["mediator"] = plot_df["mediator"].replace(mediator_map)
+    plot_df["mediator"] = plot_df["mediator"].replace(mediator_label_map)
 
     fig, axes = plt.subplots(3, 3, figsize=figsize, sharex=True, sharey=True)
     axes = np.array(axes)
@@ -1694,6 +1686,11 @@ def run_all_simple_mediations(
                     )
 
                     merged["ses_dimension"] = x_var
+                    # Bootstrap p-value
+                    merged["p_indirect_boot"] = 2 * np.minimum(
+                        merged["prop_ab_positive"],
+                        1 - merged["prop_ab_positive"]
+                    )
                     rows.append(merged)
 
     out = pd.concat(rows, ignore_index=True)
@@ -2010,8 +2007,8 @@ def plot_significant_mediator_interactions(results, alpha=0.05, sample="Combined
         return
 
     sig_df["ses_dimension"] = sig_df["ses_dimension"].replace(ses_map)
-    sig_df["mediator1"] = sig_df["mediator1"].replace(mediator_map)
-    sig_df["mediator2"] = sig_df["mediator2"].replace(mediator_map)
+    sig_df["mediator1"] = sig_df["mediator1"].replace(mediator_label_map)
+    sig_df["mediator2"] = sig_df["mediator2"].replace(mediator_label_map)
     sig_df["outcome"] = sig_df["outcome"].replace(outcome_map)
 
     def make_label(row):
