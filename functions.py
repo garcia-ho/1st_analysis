@@ -497,6 +497,9 @@ def add_ses_space_house_variables(
 # 5. Reporting Tables
 # =============================================================================
 
+def prepare_partial_corr_data(df, vars):
+    return df[vars].dropna().copy()
+
 def construct_summary_table(df):
     """
     Descriptive statistics (n, mean, SD, median, IQR, skew) for SES index
