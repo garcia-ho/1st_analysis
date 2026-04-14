@@ -8,7 +8,7 @@ from statsmodels.stats.multitest import multipletests
 import networkx as nx
 
 from statsmodels.stats.anova import anova_lm
-
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 
 
@@ -205,6 +205,34 @@ def network_adjacency_matrix(G):
 # =============================================================================
 
 
+blocks_with_interactions = {
+    "M1_SES": [
+        "ses_factor1_score",
+        "ses_factor2_score",
+    ],
+    "M2_SES_plus_mediators": [
+        "ses_factor1_score",
+        "ses_factor2_score",
+        "conceptual_exposure_score",
+        "practical_ai_use_score",
+        "learning_ecology_score",
+        "language_load_score",
+        "epistemic_stance_score",
+    ],
+    "M3_add_interactions": [
+        "ses_factor1_score",
+        "ses_factor2_score",
+        "conceptual_exposure_score",
+        "practical_ai_use_score",
+        "learning_ecology_score",
+        "language_load_score",
+        "epistemic_stance_score",
+        "learning_x_epistemic",
+        "language_x_epistemic",
+    ],
+}
+
+
 def fit_hierarchical_models(
     df,
     outcome,
@@ -380,6 +408,108 @@ def run_hierarchical_regression(
 
 
 
+# =============================================================================
+# 4. VIF Colinearity Check
+# =============================================================================
+
+
+def get_locked_blocks(outcome):
+    base_predictors = [
+        "ses_factor1_score",
+        "ses_factor2_score",
+    ]
+
+    mediator_predictors = base_predictors + [
+        "conceptual_exposure_score",
+        "practical_ai_use_score",
+        "learning_ecology_score",
+        "language_load_score",
+        "epistemic_stance_score",
+    ]
+
+    interaction_predictors = mediator_predictors + [
+        "learning_x_epistemic",
+        "language_x_epistemic",
+    ]
+
+    if outcome == "ai_factor1_score":
+        return {
+            "M1_SES": base_predictors,
+            "M2_SES_plus_mediators": mediator_predictors,
+        }
+
+    elif outcome == "ai_factor2_score":
+        return {
+            "M1_SES": base_predictors,
+            "M2_SES_plus_mediators": mediator_predictors,
+            "M3_add_interactions": interaction_predictors,
+        }
+
+    else:
+        raise ValueError("outcome must be 'ai_factor1_score' or 'ai_factor2_score'")
+    
+def add_final_interaction_terms(df):
+    d = df.copy()
+    d["learning_x_epistemic"] = d["learning_ecology_score"] * d["epistemic_stance_score"]
+    d["language_x_epistemic"] = d["language_load_score"] * d["epistemic_stance_score"]
+    return d
+
+def run_locked_final_models(df, alpha=0.05):
+    d = add_final_interaction_terms(df).copy()
+
+    out_understanding = run_hierarchical_regression(
+        df=d,
+        outcomes=["ai_factor1_score"],
+        blocks=get_locked_blocks("ai_factor1_score"),
+        standardize=True,
+        cov_type="HC3",
+        block_method="holm",
+        coef_method="fdr_bh",
+        alpha=alpha
+    )
+
+    out_confidence = run_hierarchical_regression(
+        df=d,
+        outcomes=["ai_factor2_score"],
+        blocks=get_locked_blocks("ai_factor2_score"),
+        standardize=True,
+        cov_type="HC3",
+        block_method="holm",
+        coef_method="fdr_bh",
+        alpha=alpha
+    )
+
+    return {
+        "ai_understanding": out_understanding,
+        "ai_confidence": out_confidence,
+    }
+
+def get_final_model_name(outcome):
+    return "M2_SES_plus_mediators" if outcome == "ai_factor1_score" else "M3_add_interactions"
+
+
+def vif_table_from_locked_model(locked_obj, outcome, model_name):
+    model = locked_obj["models"][outcome][model_name]
+    exog = pd.DataFrame(model.model.exog, columns=model.model.exog_names)
+
+    if "const" in exog.columns:
+        exog = exog.drop(columns=["const"])
+
+    rows = []
+    for i, col in enumerate(exog.columns):
+        rows.append({
+            "term": col,
+            "vif": variance_inflation_factor(exog.values, i)
+        })
+
+    return pd.DataFrame(rows).sort_values("vif", ascending=False).reset_index(drop=True)
+
+def get_final_model_name(outcome):
+    return "M2_SES_plus_mediators" if outcome == "ai_factor1_score" else "M3_add_interactions"
+
+
+
+
 
 
 # =============================================================================
@@ -480,3 +610,157 @@ def plot_network_graph(G, layout="spring", figsize=(10, 8), seed=2026):
     plt.tight_layout()
     plt.show()
 
+
+def plot_interaction_effect( df, outcome, focal, moderator, controls=None, 
+                            use_observed_levels=True, n_points=100, title=None):
+
+    if controls is None:
+        controls = []
+
+    needed = [outcome, focal, moderator] + controls
+    d = df[needed].dropna().copy()
+
+    # standardize 
+    for col in needed:
+        d[col] = (d[col] - d[col].mean()) / d[col].std(ddof=0)
+
+    d["interaction_term"] = d[focal] * d[moderator]
+
+    X_cols = [focal, moderator, "interaction_term"] + controls
+    X = sm.add_constant(d[X_cols])
+    y = d[outcome]
+
+    model = sm.OLS(y, X).fit(cov_type="HC3")
+
+    focal_grid = np.linspace(
+        d[focal].quantile(0.05),
+        d[focal].quantile(0.95),
+        n_points
+    )
+
+    # choose moderator levels from actual observed standardized values
+    uniq = np.sort(d[moderator].unique())
+
+    if use_observed_levels:
+        if len(uniq) < 3:
+            raise ValueError(
+                f"{moderator} has fewer than 3 distinct observed values after standardization."
+            )
+
+        low_idx = max(0, int(np.floor(0.10 * (len(uniq) - 1))))
+        mid_idx = int(np.floor(0.50 * (len(uniq) - 1)))
+        high_idx = min(len(uniq) - 1, int(np.floor(0.90 * (len(uniq) - 1))))
+
+        # make sure the three levels are distinct
+        chosen = [uniq[low_idx], uniq[mid_idx], uniq[high_idx]]
+        chosen = sorted(pd.unique(chosen))
+
+        if len(chosen) < 3:
+            chosen = [uniq[0], uniq[len(uniq) // 2], uniq[-1]]
+
+        mod_low, mod_mid, mod_high = chosen[0], chosen[1], chosen[2]
+    else:
+        mod_low, mod_mid, mod_high = -1.0, 0.0, 1.0
+
+    print(f"{moderator} observed levels used:")
+    print("Low  =", round(float(mod_low), 3))
+    print("Mid  =", round(float(mod_mid), 3))
+    print("High =", round(float(mod_high), 3))
+
+    pred_rows = []
+    for label, mod_val in [("Low", mod_low), ("Mid", mod_mid), ("High", mod_high)]:
+        tmp = pd.DataFrame({
+            focal: focal_grid,
+            moderator: mod_val,
+            "interaction_term": focal_grid * mod_val,
+        })
+
+        for c in controls:
+            tmp[c] = 0.0
+
+        tmp = sm.add_constant(tmp, has_constant="add")
+        pred = model.predict(tmp[X.columns])
+
+        pred_rows.append(pd.DataFrame({
+            focal: focal_grid,
+            "predicted": pred,
+            "moderator_level": label
+        }))
+
+    pred_df = pd.concat(pred_rows, ignore_index=True)
+
+    plt.figure(figsize=(12, 7))
+
+    style_map = {
+        "Low": "--",
+        "Mid": "-",
+        "High": ":"
+    }
+
+    for label in ["Low", "Mid", "High"]:
+        sub = pred_df[pred_df["moderator_level"] == label]
+        plt.plot(
+            sub[focal],
+            sub["predicted"],
+            linestyle=style_map[label],
+            linewidth=2.5,
+            label=label
+        )
+
+    plt.xlabel(focal)
+    plt.ylabel(outcome)
+    plt.title(title if title is not None else f"{moderator} × {focal} on {outcome}")
+    plt.legend(title=moderator)
+    plt.tight_layout()
+    plt.show()
+
+    return model, pred_df
+
+
+label_map = {
+    "ai_factor2_score": "AI confidence",
+    "learning_ecology_score": "Learning ecology",
+    "language_load_score": "Language load",
+    "epistemic_stance_score": "Epistemic stance",
+}
+
+
+def plot_locked_ai_confidence_interactions(df):
+    # Plot 1: learning ecology × epistemic stance
+    model1, pred1 = plot_interaction_effect(
+        df=df,
+        outcome="ai_factor2_score",
+        focal="learning_ecology_score",
+        moderator="epistemic_stance_score",
+        controls=[
+            "ses_factor1_score",
+            "ses_factor2_score",
+            "conceptual_exposure_score",
+            "practical_ai_use_score",
+            "language_load_score",
+        ],
+        title="Learning ecology × Epistemic stance on AI confidence"
+    )
+
+    # Plot 2: language load × epistemic stance
+    model2, pred2 = plot_interaction_effect(
+        df=df,
+        outcome="ai_factor2_score",
+        focal="language_load_score",
+        moderator="epistemic_stance_score",
+        controls=[
+            "ses_factor1_score",
+            "ses_factor2_score",
+            "conceptual_exposure_score",
+            "practical_ai_use_score",
+            "learning_ecology_score",
+        ],
+        title="Language load × Epistemic stance on AI confidence"
+    )
+
+    return {
+        "learning_x_epistemic_model": model1,
+        "learning_x_epistemic_pred": pred1,
+        "language_x_epistemic_model": model2,
+        "language_x_epistemic_pred": pred2,
+    }
