@@ -9,6 +9,22 @@ import networkx as nx
 from statsmodels.stats.anova import anova_lm
 from functions_Network import *
 
+import itertools
+
+
+def summarize_columns(df, cols, round_digits=3):
+
+    out = (
+        df[cols]
+        .agg(["count", "mean", "std", "min", "median", "max"])
+        .T
+        .reset_index()
+        .rename(columns={"index": "variable"})
+        .round(round_digits)
+    )
+    return out
+
+
 def merge_and_score_followup_ai(
     baseline_df,
     followup_file_1,
@@ -185,8 +201,7 @@ def paired_pre_post_test(df, pre_col, post_col):
 
     out = pd.DataFrame({
         "mean_change_post_minus_pre": [diff.mean()],
-        "wilcoxon_p": [w_p],
-        "cohens_dz": [dz],
+        "wilcoxon_p": [w_p]
     })
 
     return out
@@ -262,6 +277,10 @@ def run_two_wave_ai_network(
         "ai_factor2_score",
         "ai_factor1_score_post",
         "ai_factor2_score_post",
+        # "ai_conceptual_score_pre",
+        # "ai_conceptual_score_post",
+        # "ai_confidence_score_pre",
+        # "ai_confidence_score_post"
     ]
 
     d = df[vars_two_wave].dropna().copy()
@@ -297,6 +316,8 @@ def run_change_score_ai_network(
     d["delta_ai_factor1"] = d["ai_factor1_score_post"] - d["ai_factor1_score"]
     d["delta_ai_factor2"] = d["ai_factor2_score_post"] - d["ai_factor2_score"]
 
+    # d["delta_ai_factor1"] = d["ai_conceptual_score_post"] - d["ai_conceptual_score_pre"]
+    # d["delta_ai_factor2"] = d["ai_confidence_score_post"] - d["ai_confidence_score_pre"]
     vars_change = [
         "ses_factor1_score",
         "ses_factor2_score",
@@ -328,3 +349,349 @@ def run_change_score_ai_network(
         "graph": G,
     }
 
+
+
+
+#____________________
+# Test AI literacy Gain in different SES groups
+#____________________
+
+def compare_gain_by_all_ses_binary(
+    df,
+    ses_cols,
+    pre_post_pairs,
+    alpha=0.05,
+    low_label="Low SES",
+    high_label="High SES"
+):
+
+    d = df.copy()
+
+    # 1) gain scores
+    for gain_col, (pre_col, post_col) in pre_post_pairs.items():
+        d[gain_col] = d[post_col] - d[pre_col]
+
+    gain_cols = list(pre_post_pairs.keys())
+    result_rows = []
+    desc_rows = []
+
+    for ses_col in ses_cols:
+        cutoff = d[ses_col].median()
+        group_col = f"{ses_col}_group"
+        d[group_col] = np.where(d[ses_col] <= cutoff, low_label, high_label)
+
+        for gain_col in gain_cols:
+            sub = d[[ses_col, group_col, gain_col]].dropna().copy()
+            low_vals = sub.loc[sub[group_col] == low_label, gain_col]
+            high_vals = sub.loc[sub[group_col] == high_label, gain_col]
+            # descriptives
+
+            desc = (
+                sub.groupby(group_col)[gain_col]
+                .agg(["count", "mean", "std"])
+                .reset_index()
+            )
+
+            desc["ses_col"] = ses_col
+            desc["gain"] = gain_col
+            desc_rows.append(desc)
+
+            # Welch t-test
+            t_stat, p_val = stats.ttest_ind(
+                low_vals,
+                high_vals,
+                equal_var=False,
+                nan_policy="omit"
+            )
+
+            result_rows.append({
+                "ses_col": ses_col,
+                "gain": gain_col,
+                "test": "Welch t-test",
+                "mean_diff": low_vals.mean() - high_vals.mean(),
+                "p_value": p_val,
+
+            })
+
+    results = pd.DataFrame(result_rows)
+
+    # 2) Holm correction across all SES × gain tests
+    reject, p_adj, _, _ = multipletests(results["p_value"], alpha=alpha, method="holm")
+    results["p_value_adj"] = p_adj
+    results["sig_adj"] = reject
+    descriptives = pd.concat(desc_rows, ignore_index=True)
+
+    return {
+        "data": d,
+        "results": results,
+        "descriptives": descriptives,
+
+    }
+
+
+
+
+#_--------------------
+# Test AI literacy Gain in different Mediator groups
+#_--------------------
+
+def compare_gain_by_key_mediator_binary(
+    df,
+    mediator_cols=("learning_ecology_score", "language_load_score"),
+    pre_post_pairs=None,
+    alpha=0.05,
+    low_label="Low",
+    high_label="High"
+):
+  
+    if pre_post_pairs is None:
+        raise ValueError("pre_post_pairs must be provided.")
+
+    d = df.copy()
+
+    # 1) gain scores
+    for gain_col, (pre_col, post_col) in pre_post_pairs.items():
+        d[gain_col] = d[post_col] - d[pre_col]
+
+    gain_cols = list(pre_post_pairs.keys())
+
+    result_rows = []
+    desc_rows = []
+
+    for med_col in mediator_cols:
+        cutoff = d[med_col].median()
+        group_col = f"{med_col}_group"
+
+        d[group_col] = np.where(d[med_col] <= cutoff, low_label, high_label)
+
+        for gain_col in gain_cols:
+            sub = d[[med_col, group_col, gain_col]].dropna().copy()
+
+            low_vals = sub.loc[sub[group_col] == low_label, gain_col]
+            high_vals = sub.loc[sub[group_col] == high_label, gain_col]
+
+            # descriptives
+            desc = (
+                sub.groupby(group_col)[gain_col]
+                .agg(["count", "mean", "std"])
+                .reset_index()
+            )
+            desc["mediator"] = med_col
+            desc["gain"] = gain_col
+            desc_rows.append(desc)
+
+            # Welch t-test
+            t_stat, p_val = stats.ttest_ind(
+                low_vals,
+                high_vals,
+                equal_var=False,
+                nan_policy="omit"
+            )
+
+            result_rows.append({
+                "mediator": med_col,
+                "gain": gain_col,
+                "test": "Welch t-test",
+                "mean_diff": low_vals.mean() - high_vals.mean(),
+                "p_value": p_val,
+            })
+
+    results = pd.DataFrame(result_rows)
+
+    # 2) Holm correction across all mediator × gain tests
+    reject, p_adj, _, _ = multipletests(results["p_value"], alpha=alpha, method="holm")
+    results["p_value_adj"] = p_adj
+    results["sig_adj"] = reject
+
+    descriptives = pd.concat(desc_rows, ignore_index=True)
+
+    return {
+        "data": d,
+        "results": results,
+        "descriptives": descriptives,
+    }
+
+
+
+
+#_--------------------
+# Test do 2 Mediators still predict AI understanding in Phase II
+#_--------------------
+
+
+def test_phase1_ai_understanding_mediators_in_phase2(
+    df,
+    mediators=("language_load_score", "epistemic_stance_score"),
+    pre_col="ai_factor1_score",
+    post_col="ai_factor1_score_post",
+    standardize=True,
+    cov_type="HC3",
+    alpha=0.05,
+    p_adjust_method="holm"
+
+):
+
+    model_rows = []
+    coef_rows = []
+    models = {}
+
+    for med in mediators:
+        needed = [pre_col, post_col, med]
+        d = df[needed].dropna().copy()
+
+        if standardize:
+            for col in needed:
+                d[col] = (d[col] - d[col].mean()) / d[col].std(ddof=0)
+
+        y = d[post_col]
+        X = sm.add_constant(d[[pre_col, med]])
+        model = sm.OLS(y, X).fit(cov_type=cov_type)
+        models[med] = model
+        ci = model.conf_int()
+
+        model_rows.append({
+            "mediator": med,
+            "n": int(model.nobs),
+            "r_squared": model.rsquared,
+            "adj_r_squared": model.rsquared_adj,
+            "f_pvalue": model.f_pvalue,
+        })
+
+        for term in [pre_col, med]:
+            coef_rows.append({
+                "mediator": med,
+                "term": term,
+                "beta": model.params[term],
+                "p_value": model.pvalues[term]
+            })
+
+    model_table = pd.DataFrame(model_rows)
+    coef_table = pd.DataFrame(coef_rows)
+
+    # adjust only the mediator terms, not the pre-score term
+    mask = coef_table["term"].isin(mediators)
+
+    reject, p_adj, _, _ = multipletests(
+        coef_table.loc[mask, "p_value"],
+        alpha=alpha,
+        method=p_adjust_method
+
+    )
+
+    coef_table["p_value_adj"] = np.nan
+    coef_table["sig_adj"] = False
+    coef_table.loc[mask, "p_value_adj"] = p_adj
+    coef_table.loc[mask, "sig_adj"] = reject
+
+    return {
+        "model_table": model_table,
+        "coef_table": coef_table,
+        "models": models,
+    }
+
+
+
+#_--------------------
+# Visualization
+#_--------------------
+
+ses_cols = [
+    "ses_parent1_edu_num",
+    "ses_parent2_edu_num",
+    "ses_household_income_num",
+    "ses_financial_constraint_scored_num",
+    "ses_home_area_num",
+    "ses_housing_type_num",
+    "ses_school_type_num",
+    "ses_device_access_num",
+    "ses_internet_quality_num",
+]
+
+reverse_cols = [
+    "ses_financial_constraint_scored_num",
+    "ses_device_access_num",
+    "ses_internet_quality_num",
+]
+
+
+def add_ses_index_mean(df, ses_cols, reverse_cols=None, new_col="ses_index"):
+
+    d = df.copy()
+    if reverse_cols is None:
+        reverse_cols = []
+
+    for col in reverse_cols:
+        if col not in ses_cols:
+            continue
+        col_min = d[col].min()
+        col_max = d[col].max()
+        d[col] = col_max + col_min - d[col]
+    d[new_col] = d[ses_cols].mean(axis=1)
+    return d
+
+
+def plot_boxplots(df, cols, label_map=None, figsize=(16, 10), rotation=10):
+    """
+    Colorful box plots for SES / mediator variables.
+    """
+    d = df[cols].dropna().copy()
+
+    plot_df = d.copy()
+    if label_map is not None:
+        plot_df = plot_df.rename(columns=label_map)
+
+    data = [plot_df[c].dropna() for c in plot_df.columns]
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    bp = ax.boxplot(
+        data,
+        patch_artist=True,
+        labels=plot_df.columns,
+        medianprops=dict(color="black", linewidth=1.8),
+        whiskerprops=dict(linewidth=1.2),
+        capprops=dict(linewidth=1.2),
+        boxprops=dict(linewidth=1.2),
+    )
+
+    colors = plt.cm.Set3(np.linspace(0, 1, len(plot_df.columns)))
+    for patch, color in zip(bp["boxes"], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.9)
+
+    ax.set_xticklabels(plot_df.columns, rotation=rotation, ha="right")
+    ax.set_ylabel("Score")
+    ax.set_title("Distribution of variables")
+
+    plt.tight_layout()
+    plt.show()
+
+
+
+
+def plot_pre_post_boxplots(df, pairs, label_map=None, figsize=(8, 5)):
+
+    n = len(pairs)
+    fig, axes = plt.subplots(1, n, figsize=(figsize[0] * n / 2, figsize[1]))
+    if n == 1:
+        axes = [axes]
+    for ax, (pre_col, post_col) in zip(axes, pairs):
+        sub = df[[pre_col, post_col]].dropna()
+        cols = [pre_col, post_col]
+        labels = [label_map.get(c, c) if label_map else c for c in cols]
+        ax.boxplot([sub[pre_col], sub[post_col]], labels=labels)
+        ax.set_title(f"{labels[0]} vs {labels[1]}")
+        ax.set_ylabel("Score")
+
+    plt.tight_layout()
+    plt.show()
+
+
+ai_label_map = {
+    "ai_factor1_score": "AI understanding (pre)",
+    "ai_factor1_score_post": "AI understanding (post)",
+    "ai_factor2_score": "AI confidence (pre)",
+    "ai_factor2_score_post": "AI confidence (post)",
+    "ai_lit_score_pre": "AI literacy (pre)",
+    "ai_lit_score_post": "AI literacy (post)",
+}

@@ -552,12 +552,20 @@ def plot_partial_corr_heatmap(pc_obj, adjust_method="fdr_bh", alpha=0.05, sig_on
     plt.show()
 
 
-def plot_network_graph(G, layout="spring", figsize=(10, 8), seed=2026):
+def plot_network_graph(
+    G,
+    layout="spring",
+    figsize=(10, 8),
+    seed=2026,
+    pad_ratio=0.18,
+    node_size=3000,
+    font_size=20
+):
     if len(G.nodes) == 0:
         print("No edges in graph.")
         return
 
-    plt.figure(figsize=figsize)
+    fig, ax = plt.subplots(figsize=figsize)
 
     if layout == "spring":
         pos = nx.spring_layout(G, seed=seed, k=1.0)
@@ -575,13 +583,16 @@ def plot_network_graph(G, layout="spring", figsize=(10, 8), seed=2026):
         for u, v in G.edges()
     ]
 
-    # node colors by group if available
     default_color = "#cccccc"
     group_color_map = {
         "SES": "#f4a261",
         "Mediator": "#2a9d8f",
         "AI": "#e9c46a",
+        "AI_pre": "#e9c46a",
+        "AI_post": "#90caf9",
+        "AI_change": "#cdb4db",
     }
+
     node_colors = []
     for n in G.nodes():
         grp = G.nodes[n].get("group", None)
@@ -590,24 +601,48 @@ def plot_network_graph(G, layout="spring", figsize=(10, 8), seed=2026):
     nx.draw_networkx_nodes(
         G, pos,
         node_color=node_colors,
-        node_size=3000,
+        node_size=node_size,
         edgecolors="black",
-        linewidths=1.5
+        linewidths=1.5,
+        ax=ax
     )
     nx.draw_networkx_edges(
         G, pos,
         edge_color=edge_colors,
         width=edge_widths,
-        alpha=0.6
+        alpha=0.6,
+        ax=ax
     )
     nx.draw_networkx_labels(
         G, pos,
-        font_size=20
+        font_size=font_size,
+        ax=ax
     )
 
-    plt.title("Partial-correlation network")
-    plt.axis("off")
-    plt.tight_layout()
+    # add padding around plotted positions
+    xs = np.array([p[0] for p in pos.values()])
+    ys = np.array([p[1] for p in pos.values()])
+
+    x_min, x_max = xs.min(), xs.max()
+    y_min, y_max = ys.min(), ys.max()
+
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+
+    # handle degenerate cases
+    if x_range == 0:
+        x_range = 1.0
+    if y_range == 0:
+        y_range = 1.0
+
+    x_pad = x_range * pad_ratio
+    y_pad = y_range * pad_ratio
+
+    ax.set_xlim(x_min - x_pad, x_max + x_pad)
+    ax.set_ylim(y_min - y_pad, y_max + y_pad)
+
+    ax.set_title("Partial-correlation network")
+    ax.axis("off")
     plt.show()
 
 
