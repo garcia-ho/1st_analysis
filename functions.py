@@ -924,7 +924,7 @@ def plot_mediation_verification(med_df, figsize=(12, 9)):
 ses_map = {
         "ses_factor1_score": "SES Factor 1",
         "ses_factor2_score": "SES Factor 2",
-        "ses_index": "SES overall",
+    "ses_index": "SES index",
     }
 
 outcome_map = {
@@ -953,58 +953,129 @@ mediator_order = [
 
 
 # Mediation analysis part
-def plot_indirect_effect_forest(results, sample="Combined", figsize=(18, 14)):
+def plot_indirect_effect_forest(results, sample="Combined", include_ai_overall=False, figsize=(18, 14)):
     plot_df = results.copy()
-    plot_df = plot_df[plot_df["sample"] == sample].copy()
+    sample_col = next((c for c in ["sample", "group", "subset"] if c in plot_df.columns), None)
+    ses_col = next((c for c in ["ses_dimension", "x", "ses", "predictor"] if c in plot_df.columns), None)
+    outcome_col = next((c for c in ["outcome", "y", "ai_outcome", "target"] if c in plot_df.columns), None)
+    mediator_col = next((c for c in ["mediator", "m", "mediator_var"] if c in plot_df.columns), None)
+
+    if ses_col is None or outcome_col is None or mediator_col is None:
+        raise ValueError(
+            "Could not find required grouping columns for SES, mediator, and outcome."
+        )
+
+    if sample_col is not None:
+        # Try exact match first, then case-insensitive fallback.
+        keep = plot_df[sample_col] == sample
+        if not keep.any():
+            keep = plot_df[sample_col].astype(str).str.lower() == str(sample).lower()
+        plot_df = plot_df[keep].copy()
+
+    plot_df = plot_df.rename(
+        columns={ses_col: "ses_dimension", outcome_col: "outcome", mediator_col: "mediator"}
+    )
+
+    # Accept alternate column names if upstream output schema changed.
+    effect_col = next(
+        (c for c in ["indirect_boot_mean", "indirect_ab", "ab", "indirect_effect"] if c in plot_df.columns),
+        None,
+    )
+    ci_low_col = next(
+        (c for c in ["indirect_ci_low_95", "ci_low_95", "ab_ci_low", "indirect_ci_low"] if c in plot_df.columns),
+        None,
+    )
+    ci_high_col = next(
+        (c for c in ["indirect_ci_high_95", "ci_high_95", "ab_ci_high", "indirect_ci_high"] if c in plot_df.columns),
+        None,
+    )
+
+    if effect_col is None or ci_low_col is None or ci_high_col is None:
+        raise ValueError(
+            "Could not find indirect-effect columns. Expected one of "
+            "[indirect_boot_mean, indirect_ab, ab, indirect_effect] and matching CI columns."
+        )
 
     plot_df["ses_dimension"] = plot_df["ses_dimension"].replace(ses_map)
     plot_df["outcome"] = plot_df["outcome"].replace(outcome_map)
     plot_df["mediator"] = plot_df["mediator"].replace(mediator_label_map)
 
-    nrows, ncols = 3, 3
+    observed_ses = set(plot_df["ses_dimension"].dropna())
+    observed_outcomes = set(plot_df["outcome"].dropna())
+
+    ses_levels = [s for s in ses_order if s in observed_ses]
+    if not ses_levels:
+        ses_levels = sorted(observed_ses)
+
+    base_outcomes = outcome_order if include_ai_overall else [o for o in outcome_order if o != "AI literacy overall"]
+    outcome_levels = [o for o in base_outcomes if o in observed_outcomes]
+    if not outcome_levels:
+        outcome_levels = sorted(observed_outcomes)
+
+    if not ses_levels or not outcome_levels:
+        raise ValueError("No SES/outcome combinations found for the selected sample.")
+
+    nrows, ncols = len(ses_levels), len(outcome_levels)
     fig, axes = plt.subplots(nrows, ncols, figsize=figsize, sharex=True, sharey=True)
-    axes = np.array(axes).reshape(-1)
+    axes = np.array(axes, dtype=object).reshape(nrows, ncols)
 
     sig_color = "#D55E00"
     nonsig_color = "#9A9A9A"
 
-    panel_pairs = [(s, o) for s in ses_order for o in outcome_order]
+    for i, ses_dim in enumerate(ses_levels):
+        for j, outcome in enumerate(outcome_levels):
+            ax = axes[i, j]
+            sub = plot_df[
+                (plot_df["ses_dimension"] == ses_dim) &
+                (plot_df["outcome"] == outcome)
+            ].copy()
 
-    for ax, (ses_dim, outcome) in zip(axes, panel_pairs):
-        sub = plot_df[
-            (plot_df["ses_dimension"] == ses_dim) &
-            (plot_df["outcome"] == outcome)
-        ].copy()
+            sub = sub.set_index("mediator").reindex(mediator_order).reset_index()
+            y = np.arange(len(mediator_order))
+            n_plotted = 0
 
-        sub = sub.set_index("mediator").reindex(mediator_order).reset_index()
-        y = np.arange(len(mediator_order))
+            for k, (_, row) in enumerate(sub.iterrows()):
+                eff = row.get(effect_col, np.nan)
+                lo = row.get(ci_low_col, np.nan)
+                hi = row.get(ci_high_col, np.nan)
+                if pd.isna(eff) or pd.isna(lo) or pd.isna(hi):
+                    continue
+                if lo > hi:
+                    continue
 
-        for k, (_, row) in enumerate(sub.iterrows()):
-            if pd.isna(row.get("indirect_boot_mean", np.nan)):
-                continue
+                sig = (lo > 0) or (hi < 0)
+                color = sig_color if sig else nonsig_color
 
-            sig = (row["indirect_ci_low_95"] > 0) or (row["indirect_ci_high_95"] < 0)
-            color = sig_color if sig else nonsig_color
+                ax.errorbar(
+                    x=eff,
+                    y=k,
+                    xerr=[[eff - lo], [hi - eff]],
+                    fmt="o",
+                    capsize=5,
+                    color=color,
+                    ecolor=color,
+                    elinewidth=3 if sig else 2,
+                    markersize=8
+                )
+                n_plotted += 1
 
-            ax.errorbar(
-                x=row["indirect_boot_mean"],
-                y=k,
-                xerr=[[row["indirect_boot_mean"] - row["indirect_ci_low_95"]],
-                      [row["indirect_ci_high_95"] - row["indirect_boot_mean"]]],
-                fmt="o",
-                capsize=5,
-                color=color,
-                ecolor=color,
-                elinewidth=3 if sig else 2,
-                markersize=8
-            )
+            ax.axvline(0, color="black", linestyle="--", linewidth=1)
+            ax.set_title(f"{ses_dim} → {outcome}")
+            ax.set_yticks(y)
+            ax.set_yticklabels(mediator_order)
+            if n_plotted == 0:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No CI estimates",
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                    color="#666666",
+                    fontsize=11,
+                )
 
-        ax.axvline(0, color="black", linestyle="--", linewidth=1)
-        ax.set_title(f"{ses_dim} → {outcome}")
-        ax.set_yticks(y)
-        ax.set_yticklabels(mediator_order)
-
-    for ax in axes[-ncols:]:
+    for ax in axes[-1, :]:
         ax.set_xlabel("Indirect effect (a × b)")
 
     fig.suptitle(f"Indirect effects by SES dimension and AI outcome ({sample})", y=1.02)
