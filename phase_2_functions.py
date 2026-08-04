@@ -1,6 +1,16 @@
-import importlib.util
-from pathlib import Path
 from functions_Network import build_network_graph
+from functions import (
+    AI_ITEM_CODEBOOK,
+    AI_EFA_ITEMS,
+    AI_EFA_ITEMS_POST,
+    AI_CONCEPTUAL_ITEMS,
+    AI_CONFIDENCE_ITEMS,
+    clean_text,
+    extract_leading_code,
+    validate_item_order,
+    validate_score_range,
+    validate_unique_ids,
+)
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -34,40 +44,39 @@ def merge_and_score_followup_ai(
     baseline_id_col="id",
     followup_id_col="Q00_Identification",
     followup_prefix="post_",
-    functions_file="functions.py",
     item_cols=None,
     how="inner",
-    drop_temp=True
+    drop_temp=True,
+    expected_matches=None,
 ):
 
    # Merge follow-up data to baseline, preprocess the 10 post AI items,and add ai_factor1_score_post / ai_factor2_score_post.
 
-    # load old helper functions
-    spec = importlib.util.spec_from_file_location("old_functions", functions_file)
-    old_functions = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(old_functions)
-
     f1 = pd.read_csv(followup_file_1)
     f2 = pd.read_csv(followup_file_2)
+    post_specs = sorted(AI_ITEM_CODEBOOK, key=lambda row: row["post_position"])
+    expected_raw_item_cols = [row["post_source"] for row in post_specs]
+    validate_item_order(f1.columns, expected_raw_item_cols, context="Follow-up file 1")
+    validate_item_order(f2.columns, expected_raw_item_cols, context="Follow-up file 2")
     followup_df = pd.concat([f1, f2], ignore_index=True)
 
     baseline = baseline_df.copy()
     followup = followup_df.copy()
 
-    baseline[baseline_id_col] = baseline[baseline_id_col].astype(str).str.strip()
-    followup[followup_id_col] = followup[followup_id_col].astype(str).str.strip()
+    baseline[baseline_id_col] = validate_unique_ids(
+        baseline, baseline_id_col, context="Phase I analysis data"
+    )
+    followup[followup_id_col] = validate_unique_ids(
+        followup, followup_id_col, context="Combined follow-up", allow_missing=True
+    )
+    followup = followup.dropna(subset=[followup_id_col]).copy()
 
     # rename follow-up ID to match baseline
     followup = followup.rename(columns={followup_id_col: baseline_id_col})
 
-    # infer raw follow-up AI item columns before prefixing, if not supplied
+    # Use the explicit codebook; never infer item identity from arbitrary columns.
     if item_cols is None:
-        raw_item_cols = [c for c in followup.columns if c != baseline_id_col][:10]
-        if len(raw_item_cols) != 10:
-            raise ValueError(
-                f"Could not infer 10 follow-up AI item columns; found {len(raw_item_cols)}"
-            )
-        item_cols = [f"{followup_prefix}{c}" for c in raw_item_cols]
+        item_cols = [f"{followup_prefix}{c}" for c in expected_raw_item_cols]
 
     # prefix all non-ID follow-up columns
     rename_map = {
@@ -79,6 +88,11 @@ def merge_and_score_followup_ai(
 
     # merge
     d = baseline.merge(followup, on=baseline_id_col, how=how)
+    validate_unique_ids(d, baseline_id_col, context="Matched Phase II data")
+    if expected_matches is not None and len(d) != expected_matches:
+        raise ValueError(
+            f"Matched Phase II data: expected {expected_matches} rows, found {len(d)}"
+        )
 
 
     if len(item_cols) != 10:
@@ -90,50 +104,22 @@ def merge_and_score_followup_ai(
             raise KeyError(f"Missing follow-up item column: {col}")
 
         parsed_col = f"followup_ai_item_{i}_num"
-        d[col] = d[col].map(old_functions.clean_text)
-        d[parsed_col] = d[col].apply(old_functions.extract_leading_code)
+        d[col] = d[col].map(clean_text)
+        d[parsed_col] = d[col].apply(extract_leading_code)
+        validate_score_range(d[parsed_col], 1, 5, context=col)
         parsed_cols.append(parsed_col)
 
-  
-    item_map_post = {
-        1: "ai_concept_input_variation_scored_num_post",
-        2: "ai_ability_input_sensitivity_scored_num_post",
-        3: "ai_concept_blackbox_scored_num_post",
-        4: "ai_ability_explainability_scored_num_post",
-        5: "ai_concept_data_bias_scored_num_post",
-        6: "ai_ability_training_data_scored_num_post",
-        7: "ai_concept_prompt_wording_scored_num_post",
-        8: "ai_ability_prompting_scored_num_post",
-        9: "ai_concept_social_ethics_scored_num_post",
-        10: "ai_ability_social_ethics_scored_num_post",
-    }
-
-    # reverse-keyed post items from the follow-up questionnaire
-    reverse_items = {1, 3, 5, 6, 7, 9}
-
-    for i, parsed_col in enumerate(parsed_cols, start=1):
+    for item, parsed_col in zip(post_specs, parsed_cols):
         vals = d[parsed_col]
-        target_col = item_map_post[i]
-        d[target_col] = 6 - vals if i in reverse_items else vals
+        target_col = item["post_scored"]
+        d[target_col] = 6 - vals if item["reverse"] else vals
+        validate_score_range(d[target_col], 1, 5, context=target_col)
 
 
     # add original composite mean scores for pre and post
 
-    conceptual_cols_pre = [
-        "ai_concept_data_bias_scored_num",
-        "ai_concept_blackbox_scored_num",
-        "ai_concept_input_variation_scored_num",
-        "ai_concept_prompt_wording_scored_num",
-        "ai_concept_social_ethics_scored_num",
-    ]
-
-    confidence_cols_pre = [
-        "ai_ability_training_data_scored_num",
-        "ai_ability_explainability_scored_num",
-        "ai_ability_input_sensitivity_scored_num",
-        "ai_ability_prompting_scored_num",
-        "ai_ability_social_ethics_scored_num",
-    ]
+    conceptual_cols_pre = list(AI_CONCEPTUAL_ITEMS)
+    confidence_cols_pre = list(AI_CONFIDENCE_ITEMS)
 
     conceptual_cols_post = [f"{c}_post" for c in conceptual_cols_pre]
     confidence_cols_post = [f"{c}_post" for c in confidence_cols_pre]
@@ -155,7 +141,9 @@ def merge_and_score_followup_ai(
     d["ai_lit_score_post"] = d[conceptual_cols_post + confidence_cols_post].mean(axis=1)
 
 # AI-factors 1 and 2 for post scores. (Not orignial factor space)
-    ai_efa_items_post = [f"{c}_post" for c in ai_efa_items]
+    if list(ai_efa_items) != list(AI_EFA_ITEMS):
+        raise ValueError("ai_efa_items must follow the shared AI_EFA_ITEMS order")
+    ai_efa_items_post = list(AI_EFA_ITEMS_POST)
     missing = [c for c in ai_efa_items_post if c not in d.columns]
     if missing:
         raise KeyError(f"Missing post scored AI columns: {missing}")
@@ -201,7 +189,8 @@ def paired_pre_post_test(df, pre_col, post_col):
 
     out = pd.DataFrame({
         "mean_change_post_minus_pre": [diff.mean()],
-        "wilcoxon_p": [w_p]
+        "wilcoxon_p": [w_p],
+        "cohens_dz": [dz],
     })
 
     return out
@@ -213,7 +202,7 @@ def run_ai_pre_post_tests(df):
     res2 = paired_pre_post_test(df, "ai_confidence_score_pre", "ai_confidence_score_post")
     out = pd.concat([res1, res2], ignore_index=True)
 
-    # multiple testing correction (Benjamini-Hochberg)
+    # Holm family-wise correction across the two pre/post outcomes.
     reject_w, p_w_adj, _, _ = multipletests(out["wilcoxon_p"], method="holm", alpha=0.05)
     out["wilcoxon_p_adj"] = p_w_adj
     out["wilcoxon_sig_adj"] = reject_w
@@ -615,19 +604,13 @@ reverse_cols = [
 
 
 def add_ses_index_mean(df, ses_cols, reverse_cols=None, new_col="ses_index"):
-
-    d = df.copy()
-    if reverse_cols is None:
-        reverse_cols = []
-
-    for col in reverse_cols:
-        if col not in ses_cols:
-            continue
-        col_min = d[col].min()
-        col_max = d[col].max()
-        d[col] = col_max + col_min - d[col]
-    d[new_col] = d[ses_cols].mean(axis=1)
-    return d
+    """Backward-compatible guard: Phase II must retain the Phase I SES index."""
+    if new_col not in df.columns:
+        raise KeyError(
+            f"{new_col!r} is missing. Build it with functions.prepare_dataset "
+            "before subsetting or merging Phase II respondents."
+        )
+    return df.copy()
 
 
 def plot_boxplots(df, cols, label_map=None, figsize=(16, 10), rotation=10):

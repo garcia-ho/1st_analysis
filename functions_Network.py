@@ -46,7 +46,15 @@ def partial_corr_one(df, x, y, controls):
     resid_x = model_x.resid
     resid_y = model_y.resid
 
-    r, p = stats.pearsonr(resid_x, resid_y)
+    r = stats.pearsonr(resid_x, resid_y).statistic
+    degrees_freedom = len(sub) - len(controls) - 2
+    if degrees_freedom <= 0 or not np.isfinite(r):
+        p = np.nan
+    elif np.isclose(abs(r), 1.0):
+        p = 0.0
+    else:
+        t_stat = r * np.sqrt(degrees_freedom / (1 - r**2))
+        p = 2 * stats.t.sf(abs(t_stat), df=degrees_freedom)
     return r, p, len(sub)
 
 def partial_corr_matrix(df, vars):
@@ -518,7 +526,9 @@ def get_final_model_name(outcome):
 
 def plot_partial_corr_heatmap(pc_obj, adjust_method="fdr_bh", alpha=0.05, sig_only=False, figsize=(10, 8)):
     est = pc_obj["estimate"].copy()
-    tbl = partial_corr_table(pc_obj, upper_only=False)
+    # Correct each unique pair once; the old version double-counted symmetric
+    # entries when adjusting p-values for the heatmap.
+    tbl = partial_corr_table(pc_obj, upper_only=True)
     tbl = adjust_partial_corr_p(tbl, method=adjust_method, alpha=alpha)
 
     if sig_only:

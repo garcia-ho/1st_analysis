@@ -70,6 +70,126 @@ rename_map = {
     "Q33_Mediators 10": "med_epistemic_stance_2",
 }
 
+
+# One source of truth for item identity, order, subscale, and scoring at both
+# waves. `post_position` documents the required follow-up column order.
+AI_ITEM_CODEBOOK = (
+    {
+        "item": "data_bias", "subscale": "conceptual", "reverse": True,
+        "pre_source": "Q14_AI Literacy 2", "pre_numeric": "ai_concept_data_bias_r_num",
+        "pre_scored": "ai_concept_data_bias_scored_num",
+        "post_source": "Q05_AI Conceptual", "post_position": 5,
+        "post_scored": "ai_concept_data_bias_scored_num_post",
+    },
+    {
+        "item": "training_data", "subscale": "confidence", "reverse": False,
+        "pre_source": "Q15_AI Literacy 3", "pre_numeric": "ai_ability_training_data_num",
+        "pre_scored": "ai_ability_training_data_scored_num",
+        "post_source": "Q06_AI Conceptual 2", "post_position": 6,
+        "post_scored": "ai_ability_training_data_scored_num_post",
+    },
+    {
+        "item": "blackbox", "subscale": "conceptual", "reverse": True,
+        "pre_source": "Q16_AI Literacy 4", "pre_numeric": "ai_concept_blackbox_r_num",
+        "pre_scored": "ai_concept_blackbox_scored_num",
+        "post_source": "Q03_AI Representation 1", "post_position": 3,
+        "post_scored": "ai_concept_blackbox_scored_num_post",
+    },
+    {
+        "item": "explainability", "subscale": "confidence", "reverse": False,
+        "pre_source": "Q17_AI Literacy 5", "pre_numeric": "ai_ability_explainability_num",
+        "pre_scored": "ai_ability_explainability_scored_num",
+        "post_source": "Q04_AI Representation 2", "post_position": 4,
+        "post_scored": "ai_ability_explainability_scored_num_post",
+    },
+    {
+        "item": "input_variation", "subscale": "conceptual", "reverse": True,
+        "pre_source": "Q18_AI Literacy 6", "pre_numeric": "ai_concept_input_variation_r_num",
+        "pre_scored": "ai_concept_input_variation_scored_num",
+        "post_source": "Q01_AI Perception 1", "post_position": 1,
+        "post_scored": "ai_concept_input_variation_scored_num_post",
+    },
+    {
+        "item": "input_sensitivity", "subscale": "confidence", "reverse": False,
+        "pre_source": "Q19_AI Literacy 7", "pre_numeric": "ai_ability_input_sensitivity_num",
+        "pre_scored": "ai_ability_input_sensitivity_scored_num",
+        "post_source": "Q02_AI Perception 2", "post_position": 2,
+        "post_scored": "ai_ability_input_sensitivity_scored_num_post",
+    },
+    {
+        "item": "prompt_wording", "subscale": "conceptual", "reverse": True,
+        "pre_source": "Q20_AI Literacy 8", "pre_numeric": "ai_concept_prompt_wording_r_num",
+        "pre_scored": "ai_concept_prompt_wording_scored_num",
+        "post_source": "Q07_AI Interaction 1", "post_position": 7,
+        "post_scored": "ai_concept_prompt_wording_scored_num_post",
+    },
+    {
+        "item": "prompting", "subscale": "confidence", "reverse": False,
+        "pre_source": "Q21_AI Literacy 9", "pre_numeric": "ai_ability_prompting_num",
+        "pre_scored": "ai_ability_prompting_scored_num",
+        "post_source": "Q08_AI Interaction 2", "post_position": 8,
+        "post_scored": "ai_ability_prompting_scored_num_post",
+    },
+    {
+        "item": "social_ethics_limits", "subscale": "conceptual", "reverse": True,
+        "pre_source": "Q22_AI Literacy 10", "pre_numeric": "ai_concept_social_ethics_r_num",
+        "pre_scored": "ai_concept_social_ethics_scored_num",
+        "post_source": "Q09_AI Societal Impact 1", "post_position": 9,
+        "post_scored": "ai_concept_social_ethics_scored_num_post",
+    },
+    {
+        "item": "social_ethics_ability", "subscale": "confidence", "reverse": False,
+        "pre_source": "Q23_AI Literacy 11", "pre_numeric": "ai_ability_social_ethics_num",
+        "pre_scored": "ai_ability_social_ethics_scored_num",
+        "post_source": "Q10_AI Societal Impact 2", "post_position": 10,
+        "post_scored": "ai_ability_social_ethics_scored_num_post",
+    },
+)
+
+AI_EFA_ITEM_ORDER = (
+    "data_bias", "blackbox", "input_variation", "prompt_wording",
+    "social_ethics_limits", "training_data", "explainability",
+    "input_sensitivity", "prompting", "social_ethics_ability",
+)
+_AI_ITEM_BY_NAME = {row["item"]: row for row in AI_ITEM_CODEBOOK}
+AI_EFA_ITEMS = tuple(_AI_ITEM_BY_NAME[name]["pre_scored"] for name in AI_EFA_ITEM_ORDER)
+AI_EFA_ITEMS_POST = tuple(_AI_ITEM_BY_NAME[name]["post_scored"] for name in AI_EFA_ITEM_ORDER)
+AI_CONCEPTUAL_ITEMS = tuple(
+    _AI_ITEM_BY_NAME[name]["pre_scored"]
+    for name in AI_EFA_ITEM_ORDER
+    if _AI_ITEM_BY_NAME[name]["subscale"] == "conceptual"
+)
+AI_CONFIDENCE_ITEMS = tuple(
+    _AI_ITEM_BY_NAME[name]["pre_scored"]
+    for name in AI_EFA_ITEM_ORDER
+    if _AI_ITEM_BY_NAME[name]["subscale"] == "confidence"
+)
+
+
+# Canonical SES index used in every phase. Higher values always mean higher
+# SES/resources. The index is the mean of Phase-I-pooled z-scored items.
+SES_INDEX_CODEBOOK = (
+    {"item": "parent1_education", "numeric": "ses_parent1_edu_num", "scored": "ses_parent1_edu_num", "minimum": 1, "maximum": 6, "reverse": False},
+    {"item": "parent2_education", "numeric": "ses_parent2_edu_num", "scored": "ses_parent2_edu_num", "minimum": 1, "maximum": 6, "reverse": False},
+    {"item": "household_income", "numeric": "ses_household_income_num", "scored": "ses_household_income_num", "minimum": 1, "maximum": 5, "reverse": False},
+    {"item": "home_area", "numeric": "ses_home_area_num", "scored": "ses_home_area_num", "minimum": 1, "maximum": 5, "reverse": False},
+    {"item": "device_access", "numeric": "ses_device_access_num", "scored": "ses_device_access_scored_num", "minimum": 1, "maximum": 3, "reverse": True},
+    {"item": "internet_quality", "numeric": "ses_internet_quality_num", "scored": "ses_internet_quality_scored_num", "minimum": 1, "maximum": 3, "reverse": True},
+    {"item": "financial_constraint", "numeric": "ses_financial_constraint_num", "scored": "ses_financial_constraint_scored_num", "minimum": 1, "maximum": 4, "reverse": True},
+)
+SES_INDEX_ITEMS = tuple(row["scored"] for row in SES_INDEX_CODEBOOK)
+
+# Shared by both Phase-I notebooks so the fitted SES factors are identical.
+SES_EFA_ITEMS_2DIM = (
+    "ses_parent1_edu_num",
+    "ses_parent2_edu_num",
+    "ses_household_income_num",
+    "ses_financial_constraint_scored_num",
+    "ses_space_per_person",
+    "ses_housing_type_ord",
+    "ses_school_type_ord",
+)
+
 item_labels = {
     "ses_parent1_edu_num": "Parent 1 edu",
     "ses_parent2_edu_num": "Parent 2 edu",
@@ -180,6 +300,96 @@ def extract_leading_code(x):
     return np.nan
 
 
+def validate_item_order(columns, expected_columns, context="questionnaire"):
+    """Validate that required item columns exist and retain their defined order."""
+    columns = list(columns)
+    expected_columns = list(expected_columns)
+    missing = [col for col in expected_columns if col not in columns]
+    if missing:
+        raise KeyError(f"{context}: missing required item columns: {missing}")
+
+    positions = [columns.index(col) for col in expected_columns]
+    if positions != sorted(positions):
+        raise ValueError(
+            f"{context}: item columns are out of order. Expected: {expected_columns}"
+        )
+
+
+def validate_score_range(values, minimum, maximum, context="score"):
+    """Reject parsed responses outside an item's documented scale."""
+    s = pd.to_numeric(pd.Series(values), errors="coerce").dropna()
+    invalid = s[~s.between(minimum, maximum)]
+    if not invalid.empty:
+        bad_values = sorted(pd.unique(invalid).tolist())
+        raise ValueError(
+            f"{context}: values outside [{minimum}, {maximum}]: {bad_values}"
+        )
+
+
+def validate_unique_ids(df, id_col, context="dataset", allow_missing=False):
+    """Validate identifiers without printing or exposing their values."""
+    if id_col not in df.columns:
+        raise KeyError(f"{context}: missing ID column {id_col!r}")
+
+    ids = df[id_col].astype("string").str.strip().replace("", pd.NA)
+    if not allow_missing and ids.isna().any():
+        raise ValueError(f"{context}: found {int(ids.isna().sum())} missing IDs")
+
+    duplicate_count = int(ids.dropna().duplicated().sum())
+    if duplicate_count:
+        raise ValueError(f"{context}: found {duplicate_count} duplicate IDs")
+    return ids
+
+
+def score_pre_ai_items(df):
+    """Score Phase-I AI items from the shared pre/post item codebook."""
+    d = df.copy()
+    # Preserve the historical derived-column order while sourcing all scoring
+    # rules from the codebook.
+    for item_name in AI_EFA_ITEM_ORDER:
+        item = _AI_ITEM_BY_NAME[item_name]
+        source = item["pre_numeric"]
+        target = item["pre_scored"]
+        if source not in d.columns:
+            raise KeyError(f"Phase I AI scoring: missing parsed column {source!r}")
+        validate_score_range(d[source], 1, 5, context=source)
+        d[target] = 6 - d[source] if item["reverse"] else d[source]
+        validate_score_range(d[target], 1, 5, context=target)
+    return d
+
+
+def score_ses_index(df, new_col="ses_index"):
+    """Apply the canonical SES directions and pooled-z-score index definition."""
+    d = df.copy()
+    for item in SES_INDEX_CODEBOOK:
+        source = item["numeric"]
+        target = item["scored"]
+        if source not in d.columns:
+            raise KeyError(f"SES scoring: missing parsed column {source!r}")
+        validate_score_range(
+            d[source], item["minimum"], item["maximum"], context=source
+        )
+        if item["reverse"]:
+            d[target] = item["maximum"] + item["minimum"] - d[source]
+        elif target != source:
+            d[target] = d[source]
+
+    ses_scored_cols = list(SES_INDEX_ITEMS)
+    means = d[ses_scored_cols].mean()
+    sds = d[ses_scored_cols].std(ddof=0)
+    if (sds == 0).any():
+        constant_cols = sds.index[sds == 0].tolist()
+        raise ValueError(f"SES scoring: constant item columns: {constant_cols}")
+
+    # Keep the original per-column arithmetic so regenerated CSV values remain
+    # byte-stable apart from intentional scoring changes.
+    z_ses = d[ses_scored_cols].apply(
+        lambda series: (series - series.mean()) / series.std(ddof=0)
+    )
+    d[new_col] = z_ses.mean(axis=1, skipna=False)
+    return d, means.to_dict(), sds.to_dict()
+
+
 # =============================================================================
 # 3. Data Loading & Scoring
 # =============================================================================
@@ -215,10 +425,18 @@ def prepare_dataset(path_1111, path_1204):
     df   : pd.DataFrame  – fully scored dataset
     meta : dict          – lists of column names for each construct
     """
-    d1 = pd.read_csv(path_1111).assign(course="1111")
-    d2 = pd.read_csv(path_1204).assign(course="1204")
+    d1 = pd.read_csv(path_1111)
+    d2 = pd.read_csv(path_1204)
+
+    expected_ai_columns = [row["pre_source"] for row in AI_ITEM_CODEBOOK]
+    validate_item_order(d1.columns, expected_ai_columns, context="Phase I course 1111")
+    validate_item_order(d2.columns, expected_ai_columns, context="Phase I course 1204")
+
+    d1 = d1.assign(course="1111")
+    d2 = d2.assign(course="1204")
 
     df = pd.concat([d1, d2], ignore_index=True).rename(columns=rename_map)
+    df["id"] = validate_unique_ids(df, "id", context="Combined Phase I")
 
     # ── clean text ──────────────────────────────────────────────────────────
     for col in df.columns:
@@ -239,60 +457,19 @@ def prepare_dataset(path_1111, path_1204):
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     # ── AI literacy scoring ──────────────────────────────────────────────────
-    ai_reverse = [
-        "ai_concept_data_bias_r_num",
-        "ai_concept_blackbox_r_num",
-        "ai_concept_input_variation_r_num",
-        "ai_concept_prompt_wording_r_num",
-        "ai_concept_social_ethics_r_num",
-    ]
-    ai_forward = [
-        "ai_ability_training_data_num",
-        "ai_ability_explainability_num",
-        "ai_ability_input_sensitivity_num",
-        "ai_ability_prompting_num",
-        "ai_ability_social_ethics_num",
-    ]
-
-    for col in ai_reverse:
-        df[col.replace("_r_num", "_scored_num")] = 6 - df[col]
-    for col in ai_forward:
-        df[col.replace("_num", "_scored_num")] = df[col]
-
-    ai_scored_cols = [
-        "ai_concept_data_bias_scored_num",
-        "ai_concept_blackbox_scored_num",
-        "ai_concept_input_variation_scored_num",
-        "ai_concept_prompt_wording_scored_num",
-        "ai_concept_social_ethics_scored_num",
-        "ai_ability_training_data_scored_num",
-        "ai_ability_explainability_scored_num",
-        "ai_ability_input_sensitivity_scored_num",
-        "ai_ability_prompting_scored_num",
-        "ai_ability_social_ethics_scored_num",
-    ]
+    df = score_pre_ai_items(df)
+    ai_scored_cols = list(AI_EFA_ITEMS)
     df["ai_lit_score"] = df[ai_scored_cols].mean(axis=1)
 
     # ── SES scoring ──────────────────────────────────────────────────────────
-    df["ses_device_access_scored_num"] = 4 - df["ses_device_access_num"]
-    df["ses_internet_quality_scored_num"] = 4 - df["ses_internet_quality_num"]
-    df["ses_financial_constraint_scored_num"] = 5 - df["ses_financial_constraint_num"]
-
-    ses_scored_cols = [
-        "ses_parent1_edu_num",
-        "ses_parent2_edu_num",
-        "ses_household_income_num",
-        "ses_home_area_num",
-        "ses_device_access_scored_num",
-        "ses_internet_quality_scored_num",
-        "ses_financial_constraint_scored_num",
-    ]
-    z_ses = df[ses_scored_cols].apply(lambda s: (s - s.mean()) / s.std(ddof=0))
-    df["ses_index"] = z_ses.mean(axis=1)
+    df, ses_reference_means, ses_reference_sds = score_ses_index(df)
+    ses_scored_cols = list(SES_INDEX_ITEMS)
 
     meta = {
         "ai_scored_cols": ai_scored_cols,
         "ses_scored_cols": ses_scored_cols,
+        "ses_reference_means": ses_reference_means,
+        "ses_reference_sds": ses_reference_sds,
     }
     return df, meta
 
@@ -1327,7 +1504,7 @@ def run_scree_analysis(df, sample, items, figsize=(14, 8)):
     plt.tight_layout()
     plt.show()
 
-    return 
+    return eig_table
 
 
 # After diagnostics, fit an EFA model
