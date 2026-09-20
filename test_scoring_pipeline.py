@@ -9,6 +9,7 @@ from functions import (
     AI_EFA_ITEMS,
     SES_INDEX_ITEMS,
     compare_ai_literacy_by_prior_course,
+    filter_prior_ai_course,
     fit_efa,
     prepare_dataset,
     score_pre_ai_items,
@@ -94,6 +95,16 @@ def test_2026_phase_i_schema_and_prior_course_groups():
         "Yes": 31,
     }
     assert comparison["p_value_two_sided"].between(0, 1).all()
+
+    no_prior_course = filter_prior_ai_course(baseline, keep=0)
+    assert len(no_prior_course) == 60
+    assert set(no_prior_course["ai_course_taken_num"].dropna()) == {0}
+    assert no_prior_course["course"].astype(str).value_counts().to_dict() == {
+        "1111": 49,
+        "1201": 11,
+    }
+    with pytest.raises(ValueError, match="keep must be"):
+        filter_prior_ai_course(baseline, keep=2)
 
 
 def test_phase_ii_expected_matches_scoring_and_ses_preservation():

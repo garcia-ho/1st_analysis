@@ -586,6 +586,26 @@ def prepare_dataset(path_1, path_2, course_labels=None):
     return df, meta
 
 
+def filter_prior_ai_course(df, keep=0, group_col="ai_course_taken_num"):
+    """Return respondents with the requested prior AI-course status (0=No, 1=Yes)."""
+    if group_col not in df.columns:
+        raise KeyError(f"Prior-course filter: missing column: {group_col}")
+    if keep not in (0, 1):
+        raise ValueError("keep must be 0 (No prior AI course) or 1 (prior AI course)")
+
+    group = pd.to_numeric(df[group_col], errors="coerce")
+    invalid = sorted(set(group.dropna().unique()) - {0, 1})
+    if invalid:
+        raise ValueError(
+            f"{group_col}: expected only 0 (No) and 1 (Yes); found {invalid}"
+        )
+
+    filtered = df.loc[group.eq(keep)].copy().reset_index(drop=True)
+    if filtered.empty:
+        raise ValueError(f"Prior-course filter returned no rows for {group_col}={keep}")
+    return filtered
+
+
 
 # =============================================================================
 # 4. Statistical Utilities
@@ -1019,25 +1039,33 @@ def plot_item_profile(df, meta, construct="SES", figsize=(14, 8)):
 
 
 def plot_ses_ai_correlation_heatmaps(df, meta, figsize=(18, 6), annotate=False):
+    """Plot SES-by-AI item correlations for observed groups and/or one pooled sample."""
     item_labels = get_item_labels()
     ses_cols = meta["ses_scored_cols"]
     ai_cols = meta["ai_scored_cols"]
 
-    plot_df = add_combined_panel(df)
+    courses = analysis_sample_order(df)
+    pooled_only = courses == ["Combined"]
+    plot_df = df.copy() if pooled_only else add_combined_panel(df)
 
     # fixed labels and order across all panels
     row_labels = [item_labels[c] for c in ses_cols]
     col_labels = [item_labels[c] for c in ai_cols]
 
+    n_panels = len(courses)
+    if n_panels == 0:
+        raise ValueError("Correlation heatmap requires at least one analysis sample")
+    panel_figsize = figsize if n_panels > 1 else (max(8, figsize[0] / 2), figsize[1])
     fig, axes = plt.subplots(
-        1, 3,
-        figsize=figsize,
+        1, n_panels,
+        figsize=panel_figsize,
         sharex=True,
         sharey=True,
-        constrained_layout=True
+        constrained_layout=True,
+        squeeze=False,
     )
+    axes = axes.ravel()
 
-    courses = analysis_sample_order(df)
     last_mappable = None
 
     for i, (ax, course) in enumerate(zip(axes, courses)):
@@ -1078,7 +1106,7 @@ def plot_ses_ai_correlation_heatmaps(df, meta, figsize=(18, 6), annotate=False):
     # one shared colorbar for all panels
     cbar = fig.colorbar(
         last_mappable,
-        ax=axes,
+        ax=axes.tolist(),
         shrink=0.85,
         location="right",
         pad=0.02
@@ -1086,11 +1114,13 @@ def plot_ses_ai_correlation_heatmaps(df, meta, figsize=(18, 6), annotate=False):
     cbar.set_label("Pearson r", rotation=90)
 
     fig.suptitle(
-        "SES-by-AI item correlations by class and combined",
+        "SES-by-AI item correlations"
+        + (" (pooled sample)" if pooled_only else " by class and combined"),
         y=1.03,
         fontsize=15
     )
     plt.show()
+    return fig, axes
 
 def plot_ranked_effect_sizes(effect_df, top_n=12, figsize=(10, 7)):
     plot_df = effect_df.copy()
