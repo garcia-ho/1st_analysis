@@ -4,6 +4,7 @@ functions.py — Utility functions for Phase 1 AI Literacy analysis.
 """
 
 import re
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -71,75 +72,134 @@ rename_map = {
 }
 
 
+# The 2026 Moodle export starts numbering at Q00 instead of Q01.  Map that
+# schema directly to the same internal variable names used by the original
+# Phase-I pipeline so all downstream scoring and analysis code stays shared.
+rename_map_26 = {
+    "Q00_Identification": "id",
+
+    # Section A: SES
+    "Q01_Socioeconomic Background 1": "ses_parent1_edu",
+    "Q02_Socioeconomic Background 2": "ses_parent2_edu",
+    "Q03_Socioeconomic Background 3": "ses_household_income",
+    "Q04_Socioeconomic Background 4": "ses_school_type",
+    "Q05_Socioeconomic Background 5": "ses_housing_type",
+    "Q06_Socioeconomic Background 6": "ses_household_size",
+    "Q07_Socioeconomic Background 7": "ses_home_area",
+    "Q08_Socioeconomic Background 8": "ses_device_access",
+    "Q09_Socioeconomic Background 9": "ses_internet_quality",
+    "Q10_Socioeconomic Background 10->Cantonese": "ses_lang_cantonese",
+    "Q10_Socioeconomic Background 10->Mandarin": "ses_lang_mandarin",
+    "Q10_Socioeconomic Background 10->English": "ses_lang_english",
+    "Q10_Socioeconomic Background 10->Language(s) not mentioned above": "ses_lang_other",
+    "Q11_Socioeconomic Background 11": "ses_financial_constraint",
+
+    # Section B: prior AI coursework and AI literacy
+    "Q12_AI Literacy 1": "ai_course_taken",
+    "Q13_AI Literacy 2": "ai_concept_data_bias_r",
+    "Q14_AI Literacy 3": "ai_ability_training_data",
+    "Q15_AI Literacy 4": "ai_concept_blackbox_r",
+    "Q16_AI Literacy 5": "ai_ability_explainability",
+    "Q17_AI Literacy 6": "ai_concept_input_variation_r",
+    "Q18_AI Literacy 7": "ai_ability_input_sensitivity",
+    "Q19_AI Literacy 8": "ai_concept_prompt_wording_r",
+    "Q20_AI Literacy 9": "ai_ability_prompting",
+    "Q21_AI Literacy 10": "ai_concept_social_ethics_r",
+    "Q22_AI Literacy 11": "ai_ability_social_ethics",
+
+    # Section C: Mediators
+    "Q23_Mediators 1": "med_conceptual_exposure_1",
+    "Q24_Mediators 2": "med_conceptual_exposure_2",
+    "Q25_Mediators 3": "med_practical_ai_use_1",
+    "Q26_Mediators 4": "med_practical_ai_use_2",
+    "Q27_Mediators 5": "med_learning_ecology_1",
+    "Q28_Mediator 6": "med_learning_ecology_2",
+    "Q29_Mediators 7": "med_language_load_1",
+    "Q30_Mediators 8": "med_language_load_2",
+    "Q31_Mediators 9": "med_epistemic_stance_1",
+    "Q32_Mediators 10": "med_epistemic_stance_2",
+}
+
+
 # One source of truth for item identity, order, subscale, and scoring at both
 # waves. `post_position` documents the required follow-up column order.
 AI_ITEM_CODEBOOK = (
     {
         "item": "data_bias", "subscale": "conceptual", "reverse": True,
-        "pre_source": "Q14_AI Literacy 2", "pre_numeric": "ai_concept_data_bias_r_num",
+        "pre_source": "Q14_AI Literacy 2", "pre_source_26": "Q13_AI Literacy 2",
+        "pre_numeric": "ai_concept_data_bias_r_num",
         "pre_scored": "ai_concept_data_bias_scored_num",
         "post_source": "Q05_AI Conceptual", "post_position": 5,
         "post_scored": "ai_concept_data_bias_scored_num_post",
     },
     {
         "item": "training_data", "subscale": "confidence", "reverse": False,
-        "pre_source": "Q15_AI Literacy 3", "pre_numeric": "ai_ability_training_data_num",
+        "pre_source": "Q15_AI Literacy 3", "pre_source_26": "Q14_AI Literacy 3",
+        "pre_numeric": "ai_ability_training_data_num",
         "pre_scored": "ai_ability_training_data_scored_num",
         "post_source": "Q06_AI Conceptual 2", "post_position": 6,
         "post_scored": "ai_ability_training_data_scored_num_post",
     },
     {
         "item": "blackbox", "subscale": "conceptual", "reverse": True,
-        "pre_source": "Q16_AI Literacy 4", "pre_numeric": "ai_concept_blackbox_r_num",
+        "pre_source": "Q16_AI Literacy 4", "pre_source_26": "Q15_AI Literacy 4",
+        "pre_numeric": "ai_concept_blackbox_r_num",
         "pre_scored": "ai_concept_blackbox_scored_num",
         "post_source": "Q03_AI Representation 1", "post_position": 3,
         "post_scored": "ai_concept_blackbox_scored_num_post",
     },
     {
         "item": "explainability", "subscale": "confidence", "reverse": False,
-        "pre_source": "Q17_AI Literacy 5", "pre_numeric": "ai_ability_explainability_num",
+        "pre_source": "Q17_AI Literacy 5", "pre_source_26": "Q16_AI Literacy 5",
+        "pre_numeric": "ai_ability_explainability_num",
         "pre_scored": "ai_ability_explainability_scored_num",
         "post_source": "Q04_AI Representation 2", "post_position": 4,
         "post_scored": "ai_ability_explainability_scored_num_post",
     },
     {
         "item": "input_variation", "subscale": "conceptual", "reverse": True,
-        "pre_source": "Q18_AI Literacy 6", "pre_numeric": "ai_concept_input_variation_r_num",
+        "pre_source": "Q18_AI Literacy 6", "pre_source_26": "Q17_AI Literacy 6",
+        "pre_numeric": "ai_concept_input_variation_r_num",
         "pre_scored": "ai_concept_input_variation_scored_num",
         "post_source": "Q01_AI Perception 1", "post_position": 1,
         "post_scored": "ai_concept_input_variation_scored_num_post",
     },
     {
         "item": "input_sensitivity", "subscale": "confidence", "reverse": False,
-        "pre_source": "Q19_AI Literacy 7", "pre_numeric": "ai_ability_input_sensitivity_num",
+        "pre_source": "Q19_AI Literacy 7", "pre_source_26": "Q18_AI Literacy 7",
+        "pre_numeric": "ai_ability_input_sensitivity_num",
         "pre_scored": "ai_ability_input_sensitivity_scored_num",
         "post_source": "Q02_AI Perception 2", "post_position": 2,
         "post_scored": "ai_ability_input_sensitivity_scored_num_post",
     },
     {
         "item": "prompt_wording", "subscale": "conceptual", "reverse": True,
-        "pre_source": "Q20_AI Literacy 8", "pre_numeric": "ai_concept_prompt_wording_r_num",
+        "pre_source": "Q20_AI Literacy 8", "pre_source_26": "Q19_AI Literacy 8",
+        "pre_numeric": "ai_concept_prompt_wording_r_num",
         "pre_scored": "ai_concept_prompt_wording_scored_num",
         "post_source": "Q07_AI Interaction 1", "post_position": 7,
         "post_scored": "ai_concept_prompt_wording_scored_num_post",
     },
     {
         "item": "prompting", "subscale": "confidence", "reverse": False,
-        "pre_source": "Q21_AI Literacy 9", "pre_numeric": "ai_ability_prompting_num",
+        "pre_source": "Q21_AI Literacy 9", "pre_source_26": "Q20_AI Literacy 9",
+        "pre_numeric": "ai_ability_prompting_num",
         "pre_scored": "ai_ability_prompting_scored_num",
         "post_source": "Q08_AI Interaction 2", "post_position": 8,
         "post_scored": "ai_ability_prompting_scored_num_post",
     },
     {
         "item": "social_ethics_limits", "subscale": "conceptual", "reverse": True,
-        "pre_source": "Q22_AI Literacy 10", "pre_numeric": "ai_concept_social_ethics_r_num",
+        "pre_source": "Q22_AI Literacy 10", "pre_source_26": "Q21_AI Literacy 10",
+        "pre_numeric": "ai_concept_social_ethics_r_num",
         "pre_scored": "ai_concept_social_ethics_scored_num",
         "post_source": "Q09_AI Societal Impact 1", "post_position": 9,
         "post_scored": "ai_concept_social_ethics_scored_num_post",
     },
     {
         "item": "social_ethics_ability", "subscale": "confidence", "reverse": False,
-        "pre_source": "Q23_AI Literacy 11", "pre_numeric": "ai_ability_social_ethics_num",
+        "pre_source": "Q23_AI Literacy 11", "pre_source_26": "Q22_AI Literacy 11",
+        "pre_numeric": "ai_ability_social_ethics_num",
         "pre_scored": "ai_ability_social_ethics_scored_num",
         "post_source": "Q10_AI Societal Impact 2", "post_position": 10,
         "post_scored": "ai_ability_social_ethics_scored_num_post",
@@ -174,7 +234,7 @@ SES_INDEX_CODEBOOK = (
     {"item": "household_income", "numeric": "ses_household_income_num", "scored": "ses_household_income_num", "minimum": 1, "maximum": 5, "reverse": False},
     {"item": "home_area", "numeric": "ses_home_area_num", "scored": "ses_home_area_num", "minimum": 1, "maximum": 5, "reverse": False},
     {"item": "device_access", "numeric": "ses_device_access_num", "scored": "ses_device_access_scored_num", "minimum": 1, "maximum": 3, "reverse": True},
-    {"item": "internet_quality", "numeric": "ses_internet_quality_num", "scored": "ses_internet_quality_scored_num", "minimum": 1, "maximum": 3, "reverse": True},
+    {"item": "internet_quality", "numeric": "ses_internet_quality_num", "scored": "ses_internet_quality_scored_num", "minimum": 1, "maximum": 4, "reverse": True},
     {"item": "financial_constraint", "numeric": "ses_financial_constraint_num", "scored": "ses_financial_constraint_scored_num", "minimum": 1, "maximum": 4, "reverse": True},
 )
 SES_INDEX_ITEMS = tuple(row["scored"] for row in SES_INDEX_CODEBOOK)
@@ -341,6 +401,39 @@ def validate_unique_ids(df, id_col, context="dataset", allow_missing=False):
     return ids
 
 
+def phase_i_schema(columns, context="Phase I questionnaire"):
+    """Return the rename map and AI source key for a supported raw export."""
+    columns = list(columns)
+    if "Q01_Identification" in columns:
+        schema_name = "original"
+        schema_map = rename_map
+        ai_source_key = "pre_source"
+    elif "Q00_Identification" in columns:
+        schema_name = "2026"
+        schema_map = rename_map_26
+        ai_source_key = "pre_source_26"
+    else:
+        raise KeyError(
+            f"{context}: unsupported Phase-I schema; expected Q01_Identification "
+            "or Q00_Identification"
+        )
+
+    missing = [column for column in schema_map if column not in columns]
+    if missing:
+        raise KeyError(f"{context}: missing required columns: {missing}")
+
+    expected_ai_columns = [row[ai_source_key] for row in AI_ITEM_CODEBOOK]
+    validate_item_order(columns, expected_ai_columns, context=context)
+    return schema_name, schema_map
+
+
+def infer_course_label(path):
+    """Infer the course code from names such as AI_Lit_Que_1201_26.csv."""
+    stem = Path(path).stem
+    match = re.search(r"AI_Lit_Que_([^_]+)", stem)
+    return match.group(1) if match else stem
+
+
 def score_pre_ai_items(df):
     """Score Phase-I AI items from the shared pre/post item codebook."""
     d = df.copy()
@@ -402,12 +495,23 @@ def add_combined_panel(df, group_col="course", combined_label="Combined"):
     comb = df.copy()
     comb[group_col] = combined_label
     out = pd.concat([df, comb], ignore_index=True)
+    group_levels = [
+        str(value) for value in pd.unique(df[group_col].dropna())
+        if str(value) != combined_label
+    ]
     out[group_col] = pd.Categorical(
-        out[group_col],
-        categories=["1111", "1204", combined_label],
-        ordered=True,
+        out[group_col], categories=group_levels + [combined_label], ordered=True
     )
     return out
+
+
+def analysis_sample_order(df, group_col="course", combined_label="Combined"):
+    """Return observed course labels followed by the pooled-sample label."""
+    labels = [
+        str(value) for value in pd.unique(df[group_col].dropna())
+        if str(value) != combined_label
+    ]
+    return labels + [combined_label]
 
 
 def zscore_series(s):
@@ -415,7 +519,7 @@ def zscore_series(s):
     return (s - s.mean()) / s.std(ddof=0)
 
 
-def prepare_dataset(path_1111, path_1204):
+def prepare_dataset(path_1, path_2, course_labels=None):
     """
     Load the two CSV files, rename columns, extract numeric codes,
     compute reverse-scored AI literacy items, and build the SES index.
@@ -425,17 +529,23 @@ def prepare_dataset(path_1111, path_1204):
     df   : pd.DataFrame  – fully scored dataset
     meta : dict          – lists of column names for each construct
     """
-    d1 = pd.read_csv(path_1111)
-    d2 = pd.read_csv(path_1204)
+    paths = (path_1, path_2)
+    if course_labels is None:
+        course_labels = tuple(infer_course_label(path) for path in paths)
+    if len(course_labels) != 2:
+        raise ValueError("course_labels must contain exactly two labels")
 
-    expected_ai_columns = [row["pre_source"] for row in AI_ITEM_CODEBOOK]
-    validate_item_order(d1.columns, expected_ai_columns, context="Phase I course 1111")
-    validate_item_order(d2.columns, expected_ai_columns, context="Phase I course 1204")
+    prepared = []
+    schema_versions = []
+    for path, course_label in zip(paths, course_labels):
+        raw = pd.read_csv(path)
+        schema_name, schema_map = phase_i_schema(
+            raw.columns, context=f"Phase I course {course_label}"
+        )
+        prepared.append(raw.rename(columns=schema_map).assign(course=str(course_label)))
+        schema_versions.append(schema_name)
 
-    d1 = d1.assign(course="1111")
-    d2 = d2.assign(course="1204")
-
-    df = pd.concat([d1, d2], ignore_index=True).rename(columns=rename_map)
+    df = pd.concat(prepared, ignore_index=True)
     df["id"] = validate_unique_ids(df, "id", context="Combined Phase I")
 
     # ── clean text ──────────────────────────────────────────────────────────
@@ -470,6 +580,8 @@ def prepare_dataset(path_1111, path_1204):
         "ses_scored_cols": ses_scored_cols,
         "ses_reference_means": ses_reference_means,
         "ses_reference_sds": ses_reference_sds,
+        "course_labels": [str(label) for label in course_labels],
+        "schema_versions": schema_versions,
     }
     return df, meta
 
@@ -495,7 +607,7 @@ def cronbach_alpha(df_items):
 def cliffs_delta(x, y):
     """
     Compute Cliff's delta (non-parametric effect size) for two samples.
-    Positive values indicate y > x.
+    Positive values indicate x tends to be greater than y.
     """
     x = pd.Series(x).dropna()
     y = pd.Series(y).dropna()
@@ -503,6 +615,98 @@ def cliffs_delta(x, y):
         return np.nan
     u = mannwhitneyu(x, y, alternative="two-sided").statistic
     return 2 * u / (len(x) * len(y)) - 1
+
+
+def compare_ai_literacy_by_prior_course(
+    df, score_col="ai_lit_score", group_col="ai_course_taken_num"
+):
+    """Compare pooled AI literacy for students with versus without prior courses."""
+    required = [group_col, score_col]
+    missing = [column for column in required if column not in df.columns]
+    if missing:
+        raise KeyError(f"Prior-course comparison: missing columns: {missing}")
+
+    d = df[required].dropna().copy()
+    invalid_groups = sorted(set(d[group_col].unique()) - {0, 1})
+    if invalid_groups:
+        raise ValueError(
+            f"{group_col}: expected only 0 (No) and 1 (Yes); found {invalid_groups}"
+        )
+
+    no_course = d.loc[d[group_col] == 0, score_col]
+    prior_course = d.loc[d[group_col] == 1, score_col]
+    if len(no_course) < 2 or len(prior_course) < 2:
+        raise ValueError("Prior-course comparison requires at least two observations per group")
+
+    test = ttest_ind(prior_course, no_course, equal_var=False, nan_policy="omit")
+    pooled_sd = np.sqrt(
+        (
+            (len(prior_course) - 1) * prior_course.var(ddof=1)
+            + (len(no_course) - 1) * no_course.var(ddof=1)
+        )
+        / (len(prior_course) + len(no_course) - 2)
+    )
+    cohen_d = (
+        (prior_course.mean() - no_course.mean()) / pooled_sd
+        if pooled_sd > 0 else np.nan
+    )
+
+    descriptive = pd.DataFrame([
+        {
+            "prior_ai_course": "No",
+            "n": len(no_course),
+            "mean": no_course.mean(),
+            "sd": no_course.std(ddof=1),
+            "median": no_course.median(),
+            "iqr": no_course.quantile(0.75) - no_course.quantile(0.25),
+        },
+        {
+            "prior_ai_course": "Yes",
+            "n": len(prior_course),
+            "mean": prior_course.mean(),
+            "sd": prior_course.std(ddof=1),
+            "median": prior_course.median(),
+            "iqr": prior_course.quantile(0.75) - prior_course.quantile(0.25),
+        },
+    ])
+    comparison = pd.DataFrame([{
+        "outcome": score_col,
+        "mean_difference_yes_minus_no": prior_course.mean() - no_course.mean(),
+        "welch_t": test.statistic,
+        "p_value_two_sided": test.pvalue,
+        "cohen_d": cohen_d,
+    }])
+    return descriptive, comparison
+
+
+def plot_ai_literacy_by_prior_course(
+    df, score_col="ai_lit_score", group_col="ai_course_taken_num",
+    figsize=(8, 6)
+):
+    """Show the pooled AI-literacy distribution by prior AI-course history."""
+    d = df[[group_col, score_col]].dropna().copy()
+    invalid_groups = sorted(set(d[group_col].unique()) - {0, 1})
+    if invalid_groups:
+        raise ValueError(
+            f"{group_col}: expected only 0 (No) and 1 (Yes); found {invalid_groups}"
+        )
+    d["Prior AI-related course"] = d[group_col].map({0: "No", 1: "Yes"})
+
+    fig, ax = plt.subplots(figsize=figsize)
+    order = ["No", "Yes"]
+    sns.boxplot(
+        data=d, x="Prior AI-related course", y=score_col,
+        order=order, width=0.5, showfliers=False, ax=ax
+    )
+    sns.stripplot(
+        data=d, x="Prior AI-related course", y=score_col,
+        order=order, color="black", alpha=0.55, jitter=0.18, size=5, ax=ax
+    )
+    ax.set_xlabel("Previously took an AI-related HKU course")
+    ax.set_ylabel("AI literacy score (1–5)")
+    ax.set_title("AI literacy by prior AI-course experience (pooled sample)")
+    fig.tight_layout()
+    return fig, ax
 
 
 # Special: T-test for 'other' school vs non-other school
@@ -724,25 +928,30 @@ def reliability_table(df, meta):
 
 def effect_size_table(df, meta):
     """
-    Mann-Whitney U p-values and Cliff's delta (1204 vs 1111) for every
-    scored item plus the composite indices, sorted by effect size.
+    Mann-Whitney U p-values and Cliff's delta (second course vs first course)
+    for every scored item plus the composite indices.
     """
     rows = []
-    g1111 = df.query("course == '1111'")
-    g1204 = df.query("course == '1204'")
+    course_labels = meta.get("course_labels", analysis_sample_order(df)[:-1])
+    if len(course_labels) != 2:
+        raise ValueError("effect_size_table requires exactly two course groups")
+    course_1, course_2 = map(str, course_labels)
+    group_1 = df.loc[df["course"].astype(str) == course_1]
+    group_2 = df.loc[df["course"].astype(str) == course_2]
 
     cols = meta["ses_scored_cols"] + meta["ai_scored_cols"] + ["ses_index", "ai_lit_score"]
     for col in cols:
-        x = g1111[col]
-        y = g1204[col]
+        x = group_1[col]
+        y = group_2[col]
         pval = mannwhitneyu(y.dropna(), x.dropna(), alternative="two-sided").pvalue
         rows.append({
             "variable": col,
             "label": item_labels.get(col, col),
-            "cliffs_delta_1204_vs_1111": cliffs_delta(y, x),
+            "contrast": f"{course_2} vs {course_1}",
+            "cliffs_delta": cliffs_delta(y, x),
             "mw_pvalue": pval,
         })
-    return pd.DataFrame(rows).sort_values("cliffs_delta_1204_vs_1111", ascending=False)
+    return pd.DataFrame(rows).sort_values("cliffs_delta", ascending=False)
 
 
 # =============================================================================
@@ -755,11 +964,11 @@ def plot_item_profile(df, meta, construct="SES", figsize=(14, 8)):
 
     if construct.upper() == "SES":
         cols = meta["ses_scored_cols"]
-        title = "SES item profile: class 1111, class 1204, and combined"
+        title = "SES item profile by class and combined"
         ylabel = "Mean scored response"
     elif construct.upper() == "AI":
         cols = meta["ai_scored_cols"]
-        title = "AI literacy item profile: class 1111, class 1204, and combined"
+        title = "AI literacy item profile by class and combined"
         ylabel = "Mean scored response"
     else:
         raise ValueError("construct must be 'SES' or 'AI'")
@@ -785,7 +994,7 @@ def plot_item_profile(df, meta, construct="SES", figsize=(14, 8)):
 
     plt.figure(figsize=figsize)
 
-    for course in ["1111", "1204", "Combined"]:
+    for course in analysis_sample_order(df):
         sub = summary[summary["course"] == course].copy()
         sub["item_label"] = pd.Categorical(sub["item_label"], categories=order, ordered=True)
         sub = sub.sort_values("item_label")
@@ -828,7 +1037,7 @@ def plot_ses_ai_correlation_heatmaps(df, meta, figsize=(18, 6), annotate=False):
         constrained_layout=True
     )
 
-    courses = ["1111", "1204", "Combined"]
+    courses = analysis_sample_order(df)
     last_mappable = None
 
     for i, (ax, course) in enumerate(zip(axes, courses)):
@@ -877,7 +1086,7 @@ def plot_ses_ai_correlation_heatmaps(df, meta, figsize=(18, 6), annotate=False):
     cbar.set_label("Pearson r", rotation=90)
 
     fig.suptitle(
-        "SES-by-AI item correlations: class 1111, class 1204, and combined",
+        "SES-by-AI item correlations by class and combined",
         y=1.03,
         fontsize=15
     )
@@ -885,27 +1094,28 @@ def plot_ses_ai_correlation_heatmaps(df, meta, figsize=(18, 6), annotate=False):
 
 def plot_ranked_effect_sizes(effect_df, top_n=12, figsize=(10, 7)):
     plot_df = effect_df.copy()
-    plot_df = plot_df.sort_values("cliffs_delta_1204_vs_1111", ascending=False).head(top_n)
+    plot_df = plot_df.sort_values("cliffs_delta", ascending=False).head(top_n)
     plot_df = plot_df.iloc[::-1]  # reverse for horizontal plot
 
     plt.figure(figsize=figsize)
 
-    colors = ["#4C72B0" if x > 0 else "#DD8452" for x in plot_df["cliffs_delta_1204_vs_1111"]]
+    colors = ["#4C72B0" if x > 0 else "#DD8452" for x in plot_df["cliffs_delta"]]
 
     plt.barh(
         plot_df["label"],
-        plot_df["cliffs_delta_1204_vs_1111"],
+        plot_df["cliffs_delta"],
         color=colors
     )
 
     plt.axvline(0, color="black", linewidth=1)
-    plt.xlabel("Cliff's delta (1204 vs 1111)")
+    contrast = plot_df["contrast"].iloc[0] if not plot_df.empty else "course 2 vs course 1"
+    plt.xlabel(f"Cliff's delta ({contrast})")
     plt.ylabel("")
     plt.title(f"Top {top_n} ranked class differences")
 
     for i, (_, row) in enumerate(plot_df.iterrows()):
         plt.text(
-            row["cliffs_delta_1204_vs_1111"],
+            row["cliffs_delta"],
             i,
             f"  p={row['mw_pvalue']:.3f}",
             va="center"
@@ -939,10 +1149,12 @@ def plot_mediator_summary(summary_df, figsize=(18, 8), errorbar="sd"):
         ordered=True
     )
 
+    sample_order = [
+        str(value) for value in pd.unique(plot_df["sample"].dropna())
+        if str(value) != "Combined"
+    ] + ["Combined"]
     plot_df["sample"] = pd.Categorical(
-        plot_df["sample"],
-        categories=["1111", "1204", "Combined"],
-        ordered=True
+        plot_df["sample"], categories=sample_order, ordered=True
     )
 
     if errorbar == "sd":
@@ -959,10 +1171,10 @@ def plot_mediator_summary(summary_df, figsize=(18, 8), errorbar="sd"):
 
     fig, ax = plt.subplots(figsize=figsize)
 
-    offsets = {"1111": -0.22, "1204": 0.0, "Combined": 0.22}
+    offsets = dict(zip(sample_order, np.linspace(-0.22, 0.22, len(sample_order))))
     x_base = np.arange(len(mediator_order))
 
-    for sample in ["1111", "1204", "Combined"]:
+    for sample in sample_order:
         sub = plot_df[plot_df["sample"] == sample].sort_values("mediator_label")
         x = x_base + offsets[sample]
 
@@ -1641,7 +1853,7 @@ def alpha_two_items(df_pair):
 def mediator_reliability_table(df, mediator_map):
     rows = []
 
-    for sample in ["1111", "1204", "Combined"]:
+    for sample in analysis_sample_order(df):
         for mediator_name, items in mediator_map.items():
             if sample == "Combined":
                 d = df[items].dropna().copy()
@@ -1732,7 +1944,7 @@ def mediator_summary_table(df):
     ]
 
     rows = []
-    for sample in ["1111", "1204", "Combined"]:
+    for sample in analysis_sample_order(df):
         if sample == "Combined":
             d = df[mediator_scores]
         else:
@@ -1896,7 +2108,7 @@ def run_all_simple_mediations(
     if outcomes is None:
         outcomes = outcome_vars
     if sample_list is None:
-        sample_list = ["1111", "1204", "Combined"]
+        sample_list = analysis_sample_order(df)
 
     # allow one SES variable or many
     if isinstance(x, str):

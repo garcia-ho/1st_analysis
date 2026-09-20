@@ -8,6 +8,7 @@ from functions import (
     AI_ITEM_CODEBOOK,
     AI_EFA_ITEMS,
     SES_INDEX_ITEMS,
+    compare_ai_literacy_by_prior_course,
     fit_efa,
     prepare_dataset,
     score_pre_ai_items,
@@ -21,6 +22,7 @@ from phase_2_functions import merge_and_score_followup_ai
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "datasets"
 BASELINE_FILES = (DATA / "AI_Lit_Que_1111.csv", DATA / "AI_Lit_Que_1204.csv")
+BASELINE_26_FILES = (DATA / "AI_Lit_Que_1111_26.csv", DATA / "AI_Lit_Que_1201_26.csv")
 FOLLOWUP_FILES = (DATA / "AI_Lit_follow_1111.csv", DATA / "AI_Lit_follow_1204.csv")
 
 
@@ -72,6 +74,28 @@ def test_phase_i_ids_ranges_and_canonical_ses():
         validate_unique_ids(duplicate, "id", context="synthetic")
 
 
+def test_2026_phase_i_schema_and_prior_course_groups():
+    expected_pre = [row["pre_source_26"] for row in AI_ITEM_CODEBOOK]
+    for path in BASELINE_26_FILES:
+        columns = pd.read_csv(path, nrows=0).columns
+        validate_item_order(columns, expected_pre, context=path.name)
+
+    baseline, meta = prepare_dataset(*BASELINE_26_FILES)
+    assert len(baseline) == 91
+    assert meta["course_labels"] == ["1111", "1201"]
+    assert meta["schema_versions"] == ["2026", "2026"]
+    validate_unique_ids(baseline, "id", context="2026 Phase I")
+    assert baseline[list(AI_EFA_ITEMS)].stack().between(1, 5).all()
+    assert set(baseline["ai_course_taken_num"].dropna()) == {0, 1}
+
+    descriptive, comparison = compare_ai_literacy_by_prior_course(baseline)
+    assert descriptive.set_index("prior_ai_course")["n"].to_dict() == {
+        "No": 60,
+        "Yes": 31,
+    }
+    assert comparison["p_value_two_sided"].between(0, 1).all()
+
+
 def test_phase_ii_expected_matches_scoring_and_ses_preservation():
     baseline, _ = prepare_dataset(*BASELINE_FILES)
     ai_fa, _, _, _ = fit_efa(
@@ -97,4 +121,3 @@ def test_phase_ii_expected_matches_scoring_and_ses_preservation():
     training_item = next(row for row in AI_ITEM_CODEBOOK if row["item"] == "training_data")
     raw_training = merged[f'post_{training_item["post_source"]}'].str.extract(r"^(\d+)")[0].astype(float)
     assert np.allclose(merged[training_item["post_scored"]], raw_training)
-
