@@ -1421,6 +1421,7 @@ def plot_indirect_effect_forest(results, sample="Combined", include_ai_overall=F
 
     observed_ses = set(plot_df["ses_dimension"].dropna())
     observed_outcomes = set(plot_df["outcome"].dropna())
+    observed_mediators = set(plot_df["mediator"].dropna())
 
     ses_levels = [s for s in ses_order if s in observed_ses]
     if not ses_levels:
@@ -1431,8 +1432,11 @@ def plot_indirect_effect_forest(results, sample="Combined", include_ai_overall=F
     if not outcome_levels:
         outcome_levels = sorted(observed_outcomes)
 
-    if not ses_levels or not outcome_levels:
-        raise ValueError("No SES/outcome combinations found for the selected sample.")
+    plot_mediator_order = [m for m in mediator_order if m in observed_mediators]
+    plot_mediator_order.extend(sorted(observed_mediators - set(plot_mediator_order)))
+
+    if not ses_levels or not outcome_levels or not plot_mediator_order:
+        raise ValueError("No SES/outcome/mediator combinations found for the selected sample.")
 
     nrows, ncols = len(ses_levels), len(outcome_levels)
     fig, axes = plt.subplots(nrows, ncols, figsize=figsize, sharex=True, sharey=True)
@@ -1449,8 +1453,8 @@ def plot_indirect_effect_forest(results, sample="Combined", include_ai_overall=F
                 (plot_df["outcome"] == outcome)
             ].copy()
 
-            sub = sub.set_index("mediator").reindex(mediator_order).reset_index()
-            y = np.arange(len(mediator_order))
+            sub = sub.set_index("mediator").reindex(plot_mediator_order).reset_index()
+            y = np.arange(len(plot_mediator_order))
             n_plotted = 0
 
             for k, (_, row) in enumerate(sub.iterrows()):
@@ -1481,7 +1485,7 @@ def plot_indirect_effect_forest(results, sample="Combined", include_ai_overall=F
             ax.axvline(0, color="black", linestyle="--", linewidth=1)
             ax.set_title(f"{ses_dim} → {outcome}")
             ax.set_yticks(y)
-            ax.set_yticklabels(mediator_order)
+            ax.set_yticklabels(plot_mediator_order)
             if n_plotted == 0:
                 ax.text(
                     0.5,
